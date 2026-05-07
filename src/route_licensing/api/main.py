@@ -52,6 +52,13 @@ from route_licensing.ingestion.gtfs_static_loader import (
     load_gtfs,
 )
 from route_licensing.ingestion.request_parser import parse_excel_request
+from route_licensing.ingestion.demand_loader import (
+    DemandIndex,
+    generate_demand_template,
+    get_cache_meta,
+    load_demand_from_cache,
+    load_demand_from_excel,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +85,8 @@ _gtfs_all_stop_ids: frozenset = frozenset()
 _gtfs_stop_id_suffix_map: dict = {}
 _gtfs_stop_code_map: dict = {}
 
+_demand_index: DemandIndex = {}
+
 
 # ---------------------------------------------------------------------------
 # Lifespan
@@ -86,11 +95,31 @@ _gtfs_stop_code_map: dict = {}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _load_gtfs_index()
+    _load_demand_cache()
     yield
 
 
+def _load_demand_cache() -> None:
+    global _demand_index
+    cached = load_demand_from_cache()
+    if cached:
+        _demand_index = cached
+        logger.info("Demand index restored from cache: %d records.", len(cached))
+
+
+def _ensure_demand_template() -> None:
+    path = Path("data/demand/demand_template.xlsx")
+    if not path.exists():
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            generate_demand_template(str(path))
+            logger.info("Demand template generated at %s.", path)
+        except Exception as exc:
+            logger.warning("Could not generate demand template: %s", exc)
+
+
 def _load_gtfs_index() -> None:
-    global _gtfs_index, _gtfs_trip_index, _gtfs_all_stop_ids, _gtfs_stop_id_suffix_map, _gtfs_service_date
+    global _gtfs_index, _gtfs_trip_index, _gtfs_all_stop_ids, _gtfs_stop_id_suffix_map, _gtfs_stop_code_map, _gtfs_service_date
 
     gtfs_path = cfg.static_gtfs_path
     _download_gtfs_if_needed(gtfs_path)
@@ -109,7 +138,7 @@ def _load_gtfs_index() -> None:
         feed, _gtfs_service_date = load_gtfs(gtfs_path)
         _gtfs_index        = build_stop_service_index(feed)
         _gtfs_trip_index   = build_trip_index(feed)
-        _gtfs_all_stop_ids, _gtfs_stop_id_suffix_map = load_all_stop_ids(gtfs_path)
+        _gtfs_all_stop_ids, _gtfs_stop_id_suffix_map, _gtfs_stop_code_map = load_all_stop_ids(gtfs_path)
         logger.info(
             "GTFS feed loaded: %d stop-service records, %d routes, %d unique stops.",
             len(_gtfs_index),
