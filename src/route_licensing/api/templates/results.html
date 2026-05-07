@@ -1,0 +1,1836 @@
+{% extends "base.html" %}
+{% block title %}{{ result.route_id }} — Route Licensing{% endblock %}
+
+{% block content %}
+
+<!-- ── Hero ──────────────────────────────────────────────────────────── -->
+<div class="page-hero animate-in">
+    <div style="display:flex; align-items:center; gap:16px; flex-wrap:wrap; margin-bottom:8px;">
+        <a href="/" class="back-link">← Dashboard</a>
+        <a href="/history" class="back-link" style="opacity:0.7;">📋 All analyses</a>
+    </div>
+    <h1>{{ result.route_id }}</h1>
+    <p>
+        Operator: <strong>{{ result.operator }}</strong>
+        &nbsp;·&nbsp; {{ result.total_stops }} stop-departures evaluated
+        &nbsp;·&nbsp;
+        {% if result.analysed_at %}
+            {{ result.analysed_at[:10] }}
+        {% endif %}
+    </p>
+    <div style="margin-top:10px; display:flex; align-items:center; gap:8px; font-size:0.78rem; color:var(--text-muted);">
+        <span>🔗 Bookmark this page to return to this analysis.</span>
+        <code id="result-url" style="background:rgba(255,255,255,0.08); padding:2px 8px; border-radius:4px; font-size:0.75rem; cursor:pointer;"
+              onclick="navigator.clipboard.writeText(window.location.href).then(()=>this.textContent='✓ Copied!')">
+            {{ request.url }}</code>
+    </div>
+</div>
+
+<!-- ── Analysis Notices ───────────────────────────────────────────────── -->
+{% set has_notices = (result.operator == 'Unknown') or (result.unresolved_stop_ids and result.unresolved_stop_ids|length > 0) %}
+{% if has_notices %}
+<div class="notices-block animate-in">
+    <div class="notices-title">Analysis Notices</div>
+
+    {% if result.operator == 'Unknown' %}
+    <div class="notice notice-info">
+        <span class="notice-icon">ℹ️</span>
+        <div>
+            <strong>Operator not specified.</strong> No operator name was provided at upload time.
+            The analysis result is stored with operator <code>Unknown</code>.
+            Re-upload the file and enter the operator name to correct this.
+        </div>
+    </div>
+    {% endif %}
+
+    {% if result.unresolved_stop_ids and result.unresolved_stop_ids|length > 0 %}
+    <div class="notice notice-warn">
+        <span class="notice-icon">⚠️</span>
+        <div>
+            <strong>{{ result.unresolved_stop_ids|length }} stop ID(s) not found in the GTFS Static feed.</strong>
+            Geographic corridor overlap detection was skipped for these stops.
+            Timing conflict and frequency analysis ran normally for all stops.
+            Check for typos or outdated stop codes and re-upload to get full analysis coverage.
+            <div class="unresolved-ids">
+                {% for sid in result.unresolved_stop_ids %}
+                <code>{{ sid }}</code>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+</div>
+{% endif %}
+
+<!-- ── Analysis Summary Banner ───────────────────────────────────────── -->
+{# Colour coding shows overlap level — no verdict label, decision is made manually #}
+<div class="animate-in" style="margin-bottom:28px;">
+{% if result.route_verdict == 'APPROVE' %}
+    {% set banner_bg = 'rgba(34,197,94,0.08)' %}
+    {% set banner_border = 'var(--verdict-green)' %}
+    {% set banner_dot = 'var(--verdict-green)' %}
+    {% set overlap_label = 'Low overlap' %}
+{% elif result.route_verdict == 'REJECT' %}
+    {% set banner_bg = 'rgba(192,32,42,0.08)' %}
+    {% set banner_border = 'var(--verdict-red)' %}
+    {% set banner_dot = 'var(--verdict-red)' %}
+    {% set overlap_label = 'High overlap' %}
+{% else %}
+    {% set banner_bg = 'rgba(244,121,32,0.08)' %}
+    {% set banner_border = 'var(--verdict-amber)' %}
+    {% set banner_dot = 'var(--verdict-amber)' %}
+    {% set overlap_label = 'Moderate overlap' %}
+{% endif %}
+
+<div style="background:{{ banner_bg }}; border:1px solid {{ banner_border }}; border-left:5px solid {{ banner_border }};
+            border-radius:8px; padding:18px 22px;">
+
+    {# Top row: colour dot + overlap label + journey counts #}
+    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:12px;">
+        <span style="width:12px; height:12px; border-radius:50%; background:{{ banner_dot }}; flex-shrink:0; display:inline-block;"></span>
+        <span style="font-weight:700; font-size:1rem; color:{{ banner_dot }};">{{ overlap_label }}</span>
+        <span style="font-size:0.8rem; color:var(--text-muted);">— assessment for licensing review, final decision is made manually</span>
+    </div>
+
+    {# Journey coverage summary #}
+    {% if od_coverage and od_coverage.total_pairs > 0 %}
+    {% set t1 = od_coverage.tier1_pairs | default(0) %}
+    {% set t2 = od_coverage.tier2_pairs | default(0) %}
+    {% set t3 = od_coverage.tier3_pairs | default(0) %}
+    {% set unc = od_coverage.uncovered_pairs | default(0) %}
+    {% set tot = od_coverage.total_pairs %}
+    <div style="display:flex; flex-wrap:wrap; gap:10px; font-size:0.82rem;">
+        <span style="background:var(--bg-secondary); border:1px solid var(--border-color); border-radius:6px; padding:6px 12px;">
+            <strong>{{ tot }}</strong> <span style="color:var(--text-muted);">journeys assessed</span>
+        </span>
+        {% if t1 > 0 %}
+        <span style="background:rgba(192,32,42,0.08); border:1px solid rgba(192,32,42,0.25); border-radius:6px; padding:6px 12px; color:var(--verdict-red);">
+            <strong>{{ t1 }}</strong> directly covered by existing service
+            <span style="font-size:0.75rem; opacity:0.8;">({{ od_coverage.tier1_pct | default(0) }}%)</span>
+        </span>
+        {% endif %}
+        {% if t2 > 0 %}
+        <span style="background:rgba(244,121,32,0.08); border:1px solid rgba(244,121,32,0.25); border-radius:6px; padding:6px 12px; color:var(--verdict-amber);">
+            <strong>{{ t2 }}</strong> coverable via interchange
+            <span style="font-size:0.75rem; opacity:0.8;">({{ od_coverage.tier2_pct | default(0) }}%)</span>
+        </span>
+        {% endif %}
+        {% if t3 > 0 %}
+        <span style="background:rgba(100,116,139,0.08); border:1px solid rgba(100,116,139,0.25); border-radius:6px; padding:6px 12px; color:var(--text-secondary);">
+            <strong>{{ t3 }}</strong> coverable via walk access
+            <span style="font-size:0.75rem; opacity:0.8;">({{ od_coverage.tier3_pct | default(0) }}%)</span>
+        </span>
+        {% endif %}
+        {% if unc > 0 %}
+        <span style="background:rgba(34,197,94,0.08); border:1px solid rgba(34,197,94,0.25); border-radius:6px; padding:6px 12px; color:var(--verdict-green);">
+            <strong>{{ unc }}</strong> not covered by any existing service
+        </span>
+        {% endif %}
+    </div>
+    {% else %}
+    <p style="font-size:0.82rem; color:var(--text-muted); margin:0;">
+        Journey-level coverage data not available — stop-level scoring was used as the basis for this assessment.
+    </p>
+    {% endif %}
+
+    {# Key finding note based on what drove the assessment #}
+    {% if result.verdict_driver %}
+    <div style="margin-top:12px; padding-top:10px; border-top:1px solid {{ banner_border }}; font-size:0.8rem; color:var(--text-muted);">
+        {% if result.verdict_driver == 'od_approve' %}
+            No end-to-end journey on this proposal is currently served by any existing route.
+            Individual stops may be shared with other services, but that is supporting evidence only —
+            it does not indicate route duplication.
+        {% elif result.verdict_driver == 'od_tier1' %}
+            A high proportion of proposed journeys are already directly served by an existing route at the same time of day.
+            The applicant should demonstrate what additional value this service provides.
+        {% elif result.verdict_driver == 'od_tier1_unmet_demand' %}
+            Direct coverage is high, but existing services show signs of unmet demand.
+            The route may fill a genuine capacity gap — coordination with the incumbent operator is recommended.
+        {% elif result.verdict_driver == 'od_tier2' %}
+            A significant portion of proposed journeys can be made via a single interchange on existing services.
+            The applicant should demonstrate why a direct service adds sufficient value over an interchange journey.
+        {% elif result.verdict_driver == 'od_tier3' %}
+            Passengers can reach a nearby stop on foot and use an existing service for these journeys.
+            The applicant should demonstrate the convenience benefit of a direct service.
+        {% elif result.verdict_driver == 'od_low_demand' %}
+            Existing services on overlapping corridors carry low passenger volumes.
+            A new competing service risks further thinning ridership — commercial justification should be assessed.
+        {% else %}
+            Assessment based on stop-level risk scoring. Journey-level coverage data was not available for this analysis.
+        {% endif %}
+    </div>
+    {% endif %}
+
+</div>
+</div>
+
+<!-- ── Route Explanation ──────────────────────────────────────────────── -->
+{% if result.route_explanation %}
+<div class="route-explanation animate-in">
+    <div class="route-explanation-label">Licensing Assessment</div>
+    <p>{{ result.route_explanation }}</p>
+</div>
+{% endif %}
+
+<!-- ── Stop-level Summary Stats — only shown when OD journey data unavailable ──── -->
+{% if not (od_coverage and od_coverage.total_pairs > 0) %}
+<div class="stats-row animate-in" style="margin-bottom:8px;">
+    <div class="stat-card">
+        <div class="stat-value">{{ result.total_trips }}</div>
+        <div class="stat-label">Stop-departures</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" style="color:var(--verdict-green);">{{ result.green_trips }}</div>
+        <div class="stat-label">🟢 Low stop overlap</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" style="color:var(--verdict-amber);">{{ result.amber_trips }}</div>
+        <div class="stat-label">🟡 Moderate stop overlap</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" style="color:var(--verdict-red);">{{ result.red_trips }}</div>
+        <div class="stat-label">🔴 High stop overlap</div>
+    </div>
+</div>
+<div class="animate-in" style="margin-bottom:28px; padding:8px 14px; border-radius:6px;
+     background:var(--bg-secondary); border:1px solid var(--border-color);
+     font-size:0.78rem; color:var(--text-muted);">
+    ℹ️ No GTFS stop IDs resolved — showing stop-level scoring as fallback. Upload a timetable with valid GTFS stop IDs to enable the A→B journey check.
+</div>
+{% else %}
+<div class="animate-in" style="margin-bottom:28px; padding:8px 14px; border-radius:6px;
+     background:var(--bg-secondary); border:1px solid var(--border-color);
+     font-size:0.78rem; color:var(--text-muted);">
+    ℹ️ The overlap level above is based on <strong>A→B journey coverage</strong> — see the journey analysis table below for detail.
+    Stop-level scores (how many stops share geography with existing routes) are available in the expandable section and should not be used to override the journey check.
+</div>
+{% endif %}
+
+
+{# ═══════════════════════════════════════════════════════════════════════
+   SECTION 1 — SUBMITTED TIMETABLE (Route NX style)
+   ═══════════════════════════════════════════════════════════════════════ #}
+<div class="section animate-in">
+
+    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
+        <h2 class="section-title" style="margin:0;">📋 Submitted Timetable</h2>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; font-size:0.72rem;">
+            <span class="leg-pill lp-green">🟢 Low stop overlap</span>
+            <span class="leg-pill lp-amber">🟡 Moderate stop overlap</span>
+            <span class="leg-pill lp-red">🔴 High stop overlap</span>
+        </div>
+    </div>
+
+    {% if sections %}
+        {% for section in sections %}
+        <div style="margin-bottom:24px;">
+
+            <!-- Direction heading -->
+            <div class="tt-dir-header">
+                <span class="tt-dir-badge">{{ loop.index }}</span>
+                <span class="tt-dir-title">{{ section.title }}</span>
+                <span class="tt-dir-meta">{{ section.trip_count }} trip(s) · {{ section.stop_count }} stop(s)</span>
+            </div>
+
+            <!-- Route NX style table -->
+            <div class="card" style="padding:0; overflow:hidden;">
+                <div class="tt-scroll-wrap">
+                    <table class="tt-nx">
+                        <!-- Trip header row: one column per departure -->
+                        <thead>
+                            <tr>
+                                <th class="tt-nx-stop-head">Stop</th>
+                                <th class="tt-nx-id-head">ID</th>
+                                {% for trip in section.trips %}
+                                <th class="tt-nx-time-head">
+                                    Trip {{ loop.index }}
+                                </th>
+                                {% endfor %}
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for stop in section.stops %}
+                            <tr class="tt-nx-row{% if loop.index is odd %} tt-nx-odd{% endif %}">
+                                <td class="tt-nx-stop-cell">{{ stop.stop_name }}</td>
+                                <td class="tt-nx-id-cell">{{ stop.stop_id }}</td>
+                                {% for t in stop.times %}
+                                    {% if t.time %}
+                                    <td class="tt-nx-time-cell tt-nx-{{ t.verdict | lower if t.verdict else 'none' }}"
+                                        title="{{ t.verdict | replace('_',' ') | title if t.verdict else '' }}">
+                                        {{ t.time[:5] if t.time|length >= 5 else t.time }}
+                                    </td>
+                                    {% else %}
+                                    <td class="tt-nx-time-cell tt-nx-none">·</td>
+                                    {% endif %}
+                                {% endfor %}
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div>
+        {% endfor %}
+    {% else %}
+    <div class="card empty-state">
+        <div class="icon">📋</div>
+        <h3>Timetable data unavailable</h3>
+        <p>Run a new analysis to see the submitted timetable.</p>
+    </div>
+    {% endif %}
+
+</div>
+
+
+{# ═══════════════════════════════════════════════════════════════════════
+   SECTION 1b — ASSESSMENT METHODOLOGY
+   ═══════════════════════════════════════════════════════════════════════ #}
+<div class="section animate-in">
+    <details style="background:var(--card-bg); border:1px solid var(--border); border-radius:10px; padding:0;">
+        <summary style="padding:14px 20px; cursor:pointer; font-weight:600; font-size:0.9rem; list-style:none; display:flex; align-items:center; gap:8px;">
+            <span>📋</span> How was this route assessed? Methodology and thresholds applied
+        </summary>
+        <div style="padding:0 20px 18px; border-top:1px solid var(--border); margin-top:0;">
+
+            {% set t = result.applied_thresholds %}
+
+            {# ── Step-by-step formula ─────────────────────────────────────── #}
+            <div style="background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:14px; margin:14px 0 18px; font-size:0.78rem;">
+                <div style="font-weight:700; font-size:0.85rem; margin-bottom:14px;">📐 How the assessment works</div>
+                <p style="color:var(--text-muted); font-size:0.76rem; margin:0 0 14px;">
+                    The analysis is driven by a single question: <strong>can passengers already make these journeys using the existing network?</strong>
+                    The assessment works through three tiers in order, stopping as soon as coverage is established.
+                </p>
+
+                <div style="display:flex; flex-direction:column; gap:16px;">
+
+                    {# ── Signal A: OD Journey Check ────────────────────────── #}
+                    <div style="border:1px solid rgba(0,137,123,0.3); border-radius:8px; padding:12px; background:rgba(0,137,123,0.04);">
+                        <div style="font-weight:700; font-size:0.82rem; color:var(--accent-teal); margin-bottom:8px;">
+                            Journey check (primary question)
+                        </div>
+                        <p style="color:var(--text-muted); font-size:0.75rem; margin:0 0 8px;">
+                            <em>Can passengers already make these journeys using the existing network?</em>
+                            This is the headline question, assessed in three tiers:
+                        </p>
+
+                        <div style="display:flex; align-items:flex-start; gap:10px; margin-bottom:6px;">
+                            <span style="background:var(--verdict-red); color:#fff; border-radius:4px; padding:1px 7px; font-size:0.7rem; font-weight:700; flex-shrink:0; margin-top:1px;">Tier 1</span>
+                            <span style="color:var(--text-muted); font-size:0.74rem;">
+                                <strong>Direct existing service</strong> — an existing bus already makes the same journey at the same time of day.<br>
+                                ≥ <strong>{% if t %}{{ (t.get('od_reject_ratio', 0.80) * 100) | int }}{% else %}80{% endif %}%</strong> of journeys covered → 🔴 <strong>High overlap</strong> &nbsp;·&nbsp;
+                                ≥ <strong>{% if t %}{{ (t.get('od_changes_ratio', 0.60) * 100) | int }}{% else %}60{% endif %}%</strong> → 🟡 <strong>Moderate overlap</strong><br>
+                                <em style="font-size:0.71rem;">Exception: if existing services are already at capacity (high demand and infrequent), High overlap is softened to Moderate — the new route fills a genuine capacity gap.</em>
+                            </span>
+                        </div>
+
+                        <div style="display:flex; align-items:flex-start; gap:10px; margin-bottom:6px;">
+                            <span style="background:var(--verdict-amber); color:#000; border-radius:4px; padding:1px 7px; font-size:0.7rem; font-weight:700; flex-shrink:0; margin-top:1px;">Tier 2</span>
+                            <span style="color:var(--text-muted); font-size:0.74rem;">
+                                <strong>Two-leg interchange journey</strong> — no direct service, but the passenger could board an existing bus, transfer at an intermediate stop and reach their destination on a second existing service within a 5 to 45 minute connection window.<br>
+                                ≥ <strong>{% if t %}{{ (t.get('od_changes_ratio', 0.60) * 100) | int }}{% else %}60{% endif %}%</strong> of journeys possible this way → 🟡 <strong>Moderate overlap</strong> (journey is possible but requires an interchange)
+                            </span>
+                        </div>
+
+                        <div style="display:flex; align-items:flex-start; gap:10px; margin-bottom:6px;">
+                            <span style="background:rgba(100,116,139,0.4); color:#fff; border-radius:4px; padding:1px 7px; font-size:0.7rem; font-weight:700; flex-shrink:0; margin-top:1px;">Tier 3</span>
+                            <span style="color:var(--text-muted); font-size:0.74rem;">
+                                <strong>Walk access to a nearby stop</strong> — no direct or interchange service, but the passenger could walk
+                                ≤ <strong>{% if t %}{{ (t.get('od_walk_radius_metres', 400)) | int }}{% else %}400{% endif %} m</strong>
+                                to a nearby stop and catch an existing bus to their destination.<br>
+                                ≥ <strong>{% if t %}{{ (t.get('od_changes_ratio', 0.60) * 100) | int }}{% else %}60{% endif %}%</strong> covered this way → 🟡 <strong>Moderate overlap</strong> (softer signal — journey is possible but inconvenient)
+                            </span>
+                        </div>
+
+                        <div style="display:flex; align-items:flex-start; gap:10px;">
+                            <span style="background:var(--accent-teal); color:#000; border-radius:4px; padding:1px 7px; font-size:0.7rem; font-weight:700; flex-shrink:0; margin-top:1px;">Load</span>
+                            <span style="color:var(--text-muted); font-size:0.74rem;">
+                                <strong>Is existing supply meeting demand?</strong><br>
+                                High demand and infrequent existing service → <em>unmet demand</em> — softens High overlap to Moderate.<br>
+                                Low demand on overlapping corridors → <em>commercial viability risk</em> — Low overlap becomes Moderate.
+                            </span>
+                        </div>
+                    </div>
+
+                    {# ── Assessment signal priority ─────────────────────────── #}
+                    <div style="border:2px solid var(--accent-teal); border-radius:8px; padding:12px; background:rgba(0,137,123,0.04);">
+                        <div style="font-weight:700; font-size:0.82rem; color:var(--accent-teal); margin-bottom:6px;">Assessment signal</div>
+                        <span style="color:var(--text-muted); font-size:0.74rem;">
+                            The OD journey check is the primary signal. A busy stop does not indicate route duplication; only an already served <em>journey</em> does.<br>
+                            <em>Fallback:</em> if all stop IDs are unresolved and OD data is unavailable, stop and trip scoring is used and flagged in the analysis summary.
+                        </span>
+                    </div>
+
+                </div>
+            </div>
+
+            {# ── Service bands ────────────────────────────────────────────── #}
+            <div style="font-size:0.76rem; color:var(--text-muted); margin-bottom:16px;">
+                <strong>Service period bands used for all comparisons:</strong>
+                AM Peak (before 09:30) · Midday (09:30 to 16:00) · PM Peak (16:00 to 19:00) · Evening (after 19:00).
+                A proposed stop is only compared against existing services in the <em>same band</em>,
+                so a morning departure is never flagged against an evening service.
+            </div>
+
+            {# ── Thresholds table ─────────────────────────────────────────── #}
+            {% if t %}
+            <div style="font-size:0.76rem; color:var(--text-muted); margin-bottom:16px;">
+                <strong>Thresholds applied to this analysis:</strong>
+
+                {# Group 1: OD journey thresholds — primary assessment signal #}
+                <div style="margin-top:10px; margin-bottom:4px; font-size:0.7rem; font-weight:700;
+                            text-transform:uppercase; letter-spacing:0.05em; color:var(--accent-teal);">
+                    Journey coverage — primary assessment signal
+                </div>
+                <table style="border-collapse:collapse; font-size:0.75rem; width:100%;">
+                    <tr>
+                        <td style="padding:3px 10px 3px 0; color:var(--text-secondary);">Tier 1 direct service → High overlap if ≥</td>
+                        <td style="padding:3px 14px 3px 0; font-weight:600; color:var(--verdict-red);">{{ (t.get('od_reject_ratio', 0.80) * 100) | int }}% of A→B journeys already covered</td>
+                    </tr>
+                    <tr>
+                        <td style="padding:3px 10px 3px 0; color:var(--text-secondary);">Any tier coverage → Moderate overlap if ≥</td>
+                        <td style="padding:3px 14px 3px 0; font-weight:600; color:var(--verdict-amber);">{{ (t.get('od_changes_ratio', 0.60) * 100) | int }}% of A→B journeys coverable</td>
+                    </tr>
+                    <tr>
+                        <td style="padding:3px 10px 3px 0; color:var(--text-secondary);">Tier 2 interchange — transfer window</td>
+                        <td style="padding:3px 14px 3px 0; font-weight:600; color:var(--text-primary);">5 to 45 minutes between legs</td>
+                    </tr>
+                    <tr>
+                        <td style="padding:3px 10px 3px 0; color:var(--text-secondary);">Tier 3 walk access radius</td>
+                        <td style="padding:3px 0; font-weight:600; color:var(--text-primary);">≤ {{ (t.get('od_walk_radius_metres', 400)) | int }} m to nearest alternative stop</td>
+                    </tr>
+                </table>
+
+                {# Group 2: Stop-level scoring — supporting evidence only #}
+                <div style="margin-top:14px; margin-bottom:4px; font-size:0.7rem; font-weight:700;
+                            text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted);">
+                    Stop-level scoring — supporting evidence only, does not affect verdict
+                </div>
+                <table style="border-collapse:collapse; font-size:0.75rem; width:100%; opacity:0.8;">
+                    <tr>
+                        <td style="padding:3px 10px 3px 0; color:var(--text-secondary);">Timing conflict window</td>
+                        <td style="padding:3px 14px 3px 0; font-weight:600; color:var(--text-primary);">±{{ t.timing_window_minutes }} min</td>
+                        <td style="padding:3px 10px 3px 0; color:var(--text-secondary);">Corridor radius</td>
+                        <td style="padding:3px 0; font-weight:600; color:var(--text-primary);">{{ t.corridor_radius_metres | int }} m</td>
+                    </tr>
+                    <tr>
+                        <td style="padding:3px 10px 3px 0; color:var(--text-secondary);">Well-served headway (≤)</td>
+                        <td style="padding:3px 14px 3px 0; font-weight:600; color:var(--text-primary);">{{ t.min_headway_minutes }} min</td>
+                        <td style="padding:3px 10px 3px 0; color:var(--text-secondary);">Moderate headway (≤)</td>
+                        <td style="padding:3px 0; font-weight:600; color:var(--text-primary);">{{ t.amber_headway_minutes }} min</td>
+                    </tr>
+                    <tr>
+                        <td style="padding:3px 10px 3px 0; color:var(--text-secondary);">Stop scored RED if risk ≥</td>
+                        <td style="padding:3px 14px 3px 0; font-weight:600; color:var(--verdict-red);">{{ t.stop_red_threshold }} / 5</td>
+                        <td style="padding:3px 10px 3px 0; color:var(--text-secondary);">Stop scored AMBER if risk ≥</td>
+                        <td style="padding:3px 0; font-weight:600; color:var(--verdict-amber);">{{ t.stop_amber_threshold }} / 5</td>
+                    </tr>
+                </table>
+            </div>
+            {% endif %}
+
+            {% if considered_routes %}
+            <div style="margin-top:4px; border-top:1px solid var(--border); padding-top:14px;">
+                <div style="font-weight:600; font-size:0.82rem; margin-bottom:4px;">
+                    Existing routes operating in the same geographic area as this proposal:
+                </div>
+                <div style="font-size:0.74rem; color:var(--text-muted); margin-bottom:8px;">
+                    These routes share at least one proposed stop or fall within the corridor overlap radius
+                    ({% if t %}{{ t.corridor_radius_metres | int }}{% else %}300{% endif %} m)
+                    and were examined in detail during scoring.
+                </div>
+                <div style="display:flex; flex-wrap:wrap; gap:6px;">
+                {% for cr in considered_routes %}
+                    <span style="background:var(--bg); border:1px solid var(--border); border-radius:20px;
+                                 padding:3px 10px; font-size:0.75rem; display:inline-flex; align-items:center; gap:5px;">
+                        <strong>{{ cr.route_label }}</strong>
+                        <span style="color:var(--text-muted);">{{ cr.operator }}</span>
+                        <span style="color:var(--text-muted);">·</span>
+                        {% for ct in cr.conflict_types %}
+                            {% if ct == 'timing' %}<span style="color:var(--red); font-size:0.7rem;">timing</span>
+                            {% elif ct == 'corridor' %}<span style="color:var(--amber); font-size:0.7rem;">corridor</span>
+                            {% endif %}
+                        {% endfor %}
+                        <span style="color:var(--text-muted); font-size:0.68rem;">@ {{ cr.affected_stops | join(', ') }}</span>
+                    </span>
+                {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </details>
+</div>
+
+
+{# ═══════════════════════════════════════════════════════════════════════
+   SECTION 2 — STOP-LEVEL EVIDENCE (supporting only)
+   ═══════════════════════════════════════════════════════════════════════ #}
+<div class="section animate-in">
+
+    <details {% if od_coverage and od_coverage.total_pairs > 0 %}{% else %}open{% endif %}>
+    <summary style="cursor:pointer; list-style:none; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:0; padding:4px 0;">
+        <div style="display:flex; align-items:center; gap:10px;">
+            <h2 class="section-title" style="margin:0;">📊 Stop-Level Evidence</h2>
+            <span style="font-size:0.7rem; font-weight:500; color:var(--text-muted); background:rgba(100,116,139,0.1);
+                          border:1px solid rgba(100,116,139,0.25); padding:2px 10px; border-radius:20px;">
+                Supporting only · does not determine the overlap assessment
+            </span>
+        </div>
+        {% if od_coverage and od_coverage.total_pairs > 0 %}
+        <span style="font-size:0.78rem; color:var(--accent-teal); font-weight:500;">▸ Click to expand stop-level detail</span>
+        {% else %}
+        <span style="color:var(--text-muted); font-size:0.8rem;">Click any column header to sort. Expand a trip to see stop detail.</span>
+        {% endif %}
+    </summary>
+    {% if od_coverage and od_coverage.total_pairs > 0 %}
+    <p style="font-size:0.78rem; color:var(--text-muted); margin:10px 0 16px; padding:8px 12px;
+              background:rgba(100,116,139,0.05); border:1px solid rgba(100,116,139,0.2); border-radius:6px;">
+        Stop-level scores measure geographic overlap between individual stops — they are <strong>not</strong> the primary analysis signal.
+        The A→B journey check above determines the overlap level. Use this table to understand <em>which stops</em> share corridor with existing services.
+    </p>
+    {% endif %}
+
+    <!-- Filter bar -->
+    <div class="filter-bar">
+        <div class="filter-bar-item">
+            <label class="filter-label" for="f-section">Section</label>
+            <input type="text" id="f-section" class="filter-input" placeholder="Direction…" autocomplete="off">
+        </div>
+        <div class="filter-bar-item">
+            <label class="filter-label" for="f-verdict">Overlap level</label>
+            <select id="f-verdict" class="filter-select">
+                <option value="">All</option>
+                <option value="GREEN">🟢 Low overlap</option>
+                <option value="AMBER">🟡 Moderate overlap</option>
+                <option value="RED">🔴 High overlap</option>
+            </select>
+        </div>
+        <div class="filter-bar-item" style="align-self:flex-end;">
+            <button class="filter-reset-btn" id="f-reset" onclick="resetFilters()">Reset</button>
+        </div>
+        <div class="filter-count-display" id="row-count"></div>
+    </div>
+
+    <div class="card" style="padding:0;">
+        <div class="table-wrap">
+            <table id="analysis-table">
+                <thead>
+                    <tr>
+                        <th class="sortable" data-col="section">Section <span class="sort-arrow"></span></th>
+                        <th class="sortable" data-col="trip">Trip <span class="sort-arrow"></span></th>
+                        <th class="sortable" data-col="depart">Departure <span class="sort-arrow"></span></th>
+                        <th class="sortable" data-col="stops">Stops <span class="sort-arrow"></span></th>
+                        <th>Stop Breakdown</th>
+                        <th class="sortable" data-col="verdict">
+                            Risk Level
+                            <span class="sort-arrow"></span>
+                        </th>
+                        <th>Assessment Note</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="analysis-tbody">
+                {% for trip in result.trip_analysis %}
+                {% set first_stop = trip.stop_analysis[0] if trip.stop_analysis else none %}
+                {% set depart = first_stop.arrival_time if first_stop else '' %}
+                <tr class="analysis-row trip-row"
+                    data-section="{{ trip.section_title | lower }}"
+                    data-trip="{{ trip.trip_idx }}"
+                    data-depart="{{ depart }}"
+                    data-stops="{{ trip.total_stops }}"
+                    data-verdict="{{ trip.trip_verdict }}"
+                    data-trip-id="trip-{{ trip.section_idx }}-{{ trip.trip_idx }}">
+                    <td>
+                        <strong>{{ trip.section_title }}</strong>
+                    </td>
+                    <td style="text-align:center; font-weight:700; color:var(--accent-teal); font-family:monospace;">
+                        {{ trip.trip_idx + 1 }}
+                    </td>
+                    <td style="font-family:monospace; font-weight:600; color:var(--accent-teal);">
+                        {{ depart[:5] if depart|length >= 5 else depart }}
+                    </td>
+                    <td style="text-align:center;">{{ trip.total_stops }}</td>
+                    <td>
+                        <div class="stop-breakdown-bar">
+                            {% if trip.green_stops > 0 %}
+                            <span class="sb-seg sb-green" style="flex:{{ trip.green_stops }}" title="{{ trip.green_stops }} low overlap">{{ trip.green_stops }}</span>
+                            {% endif %}
+                            {% if trip.amber_stops > 0 %}
+                            <span class="sb-seg sb-amber" style="flex:{{ trip.amber_stops }}" title="{{ trip.amber_stops }} moderate overlap">{{ trip.amber_stops }}</span>
+                            {% endif %}
+                            {% if trip.red_stops > 0 %}
+                            <span class="sb-seg sb-red" style="flex:{{ trip.red_stops }}" title="{{ trip.red_stops }} high overlap">{{ trip.red_stops }}</span>
+                            {% endif %}
+                        </div>
+                    </td>
+                    <td>
+                        {% if trip.trip_verdict == 'GREEN' %}
+                            <span class="badge badge-green">🟢 Low overlap</span>
+                        {% elif trip.trip_verdict == 'RED' %}
+                            <span class="badge badge-red">🔴 High overlap</span>
+                        {% else %}
+                            <span class="badge badge-amber">🟡 Moderate overlap</span>
+                        {% endif %}
+                    </td>
+                    <td style="font-size:0.75rem; color:var(--text-secondary); max-width:220px;">
+                        {{ trip.trip_recommendation }}
+                    </td>
+                    <td>
+                        <button class="expand-btn" onclick="toggleStops('trip-{{ trip.section_idx }}-{{ trip.trip_idx }}')" title="Show/hide stops">▸</button>
+                    </td>
+                </tr>
+                <!-- Expandable stop detail rows for this trip -->
+                <tr id="trip-{{ trip.section_idx }}-{{ trip.trip_idx }}" class="trip-stops-row" style="display:none;">
+                    <td colspan="8" style="padding:0;">
+
+                        {% if trip.trip_explanation %}
+                        <div class="trip-explanation">
+                            <span class="trip-explanation-label">Trip Assessment</span>
+                            {{ trip.trip_explanation }}
+                        </div>
+                        {% endif %}
+
+                        <table class="stop-detail-table">
+                            <thead>
+                                <tr>
+                                    <th>Stop</th>
+                                    <th>ID</th>
+                                    <th>Time</th>
+                                    <th>Band</th>
+                                    <th>Risk</th>
+                                    <th>Risk Level</th>
+                                    <th>Timing</th>
+                                    <th>Headway</th>
+                                    <th>Frequency</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                            {% for stop in trip.stop_analysis %}
+                            <tr class="stop-detail-row">
+                                <td><strong>{{ stop.stop_name }}</strong></td>
+                                <td style="font-family:monospace; font-size:0.72rem; color:var(--text-muted);">{{ stop.stop_id }}</td>
+                                <td style="font-family:monospace; font-weight:600; color:var(--accent-teal);">
+                                    {{ stop.arrival_time[:5] if stop.arrival_time|length >= 5 else stop.arrival_time }}
+                                </td>
+                                <td><span class="band-badge">{{ (stop.service_band if stop.service_band else '—') | replace('_',' ') | title }}</span></td>
+                                <td style="text-align:center;">
+                                    <span class="risk-num risk-{{ 'high' if stop.risk_score >= 4 else ('mid' if stop.risk_score >= 2 else 'low') }}">
+                                        {{ stop.risk_score }}/5
+                                    </span>
+                                </td>
+                                <td>
+                                    {% if stop.verdict == 'GREEN' %}
+                                        <span class="badge badge-green">🟢</span>
+                                    {% elif stop.verdict == 'RED' %}
+                                        <span class="badge badge-red">🔴</span>
+                                    {% else %}
+                                        <span class="badge badge-amber">🟡</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if stop.timing_conflict %}
+                                        <span class="badge badge-red" style="font-size:0.7rem;">Yes</span>
+                                    {% else %}
+                                        <span style="color:var(--text-muted); font-size:0.8rem;">—</span>
+                                    {% endif %}
+                                </td>
+                                <td style="text-align:center; color:var(--text-secondary); font-size:0.8rem;">
+                                    {% if stop.avg_headway_minutes %}{{ stop.avg_headway_minutes }} min{% else %}—{% endif %}
+                                </td>
+                                <td>
+                                    {% set fv = stop.frequency_verdict %}
+                                    {% if fv == 'well_served' %}
+                                        <span class="badge badge-red" style="font-size:0.7rem;">Well Served</span>
+                                    {% elif fv == 'moderate' %}
+                                        <span class="badge badge-amber" style="font-size:0.7rem;">Moderate</span>
+                                    {% else %}
+                                        <span class="badge badge-green" style="font-size:0.7rem;">Underserved</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% if stop.explanation or (stop.verdict != 'GREEN' and stop.conflicting_services) %}
+                            <tr class="stop-explanation-row">
+                                <td colspan="9">
+                                    {% if stop.explanation %}
+                                    <div class="stop-explanation
+                                        {% if stop.verdict == 'RED' %}stop-explanation-red
+                                        {% elif stop.verdict == 'AMBER' %}stop-explanation-amber
+                                        {% else %}stop-explanation-green{% endif %}">
+                                        <span class="stop-explanation-icon">
+                                            {% if stop.verdict == 'RED' %}🔴{% elif stop.verdict == 'AMBER' %}🟡{% else %}🟢{% endif %}
+                                        </span>
+                                        {{ stop.explanation }}
+                                    </div>
+                                    {% endif %}
+                                    {% if stop.verdict != 'GREEN' and stop.conflicting_services %}
+                                    <div style="padding:6px 12px 8px; font-size:0.72rem; color:var(--text-secondary);">
+                                        <span style="font-weight:600; color:var(--text-muted);">Services at this stop causing conflict:</span>
+                                        <table style="margin-top:4px; border-collapse:collapse; width:100%;">
+                                            <thead>
+                                                <tr style="color:var(--text-muted);">
+                                                    <th style="text-align:left; padding:2px 8px;">Route</th>
+                                                    <th style="text-align:left; padding:2px 8px;">Operator</th>
+                                                    <th style="text-align:left; padding:2px 8px;">Time</th>
+                                                    <th style="text-align:left; padding:2px 8px;">Gap</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                            {% for svc in stop.conflicting_services %}
+                                                <tr>
+                                                    <td style="padding:2px 8px; font-weight:600;">
+                                                        {{ svc.route_label if svc.route_label else svc.route_id }}
+                                                        <span style="font-family:monospace; font-size:0.68rem; color:var(--text-muted); display:block;">{{ svc.route_id }}</span>
+                                                    </td>
+                                                    <td style="padding:2px 8px;">{{ svc.operator }}</td>
+                                                    <td style="padding:2px 8px; font-family:monospace;">{{ svc.arrival_time[:5] if svc.arrival_time|length >= 5 else svc.arrival_time }}</td>
+                                                    <td style="padding:2px 8px;">{{ svc.delta_minutes | round(1) }} min</td>
+                                                </tr>
+                                            {% endfor %}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endif %}
+                            {% endfor %}
+                            {% if stop.conflicting_services|length > 2 %}
+                                <div style="color:var(--text-muted);">+{{ stop.conflicting_services|length - 2 }} more</div>
+                            {% endif %}
+                        </td>
+                    </tr>
+
+                    <!-- Expandable detail row -->
+                    <tr class="detail-row" id="detail-{{ row_idx }}">
+                        <td colspan="10">
+                            <div class="detail-content">
+
+<<<<<<< HEAD
+                                <!-- Timing Conflicts -->
+                                <div class="detail-section-title">⏱ Existing Services at This Stop (Timing Analysis)</div>
+                                {% if stop.conflicting_services and stop.conflicting_services|length > 0 %}
+                                <table class="mini-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Route ID</th>
+                                            <th>Operator</th>
+                                            <th>Existing Arrival Time</th>
+                                            <th>Δ Minutes from Proposed</th>
+                                            <th>Conflict?</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                    {% for cs in stop.conflicting_services %}
+                                        <tr>
+                                            <td><strong>{{ cs.route_id }}</strong></td>
+                                            <td>{{ cs.operator }}</td>
+                                            <td>{{ cs.arrival_time }}</td>
+                                            <td>
+                                                <span style="color: {% if cs.delta_minutes <= 10 %}var(--verdict-red){% else %}var(--verdict-amber){% endif %};">
+<<<<<<< HEAD
+                                                    {{ "%.1f"|format(cs.delta_minutes) }} min
+=======
+                                                    {{ cs.delta_minutes | round(1) }} min
+>>>>>>> 061333f (bugfixes)
+                                                </span>
+                                            </td>
+                                            <td>
+                                                {% if cs.delta_minutes <= 10 %}
+                                                    <span class="badge badge-red">Yes — within window</span>
+                                                {% else %}
+                                                    <span class="badge badge-amber">Near miss</span>
+                                                {% endif %}
+                                            </td>
+                                        </tr>
+                                    {% endfor %}
+                                    </tbody>
+                                </table>
+                                {% else %}
+                                    <p class="no-data">No existing services at this stop within the timing window.</p>
+                                {% endif %}
+
+                                <!-- Corridor Overlap -->
+                                <div class="detail-section-title">🗺 Corridor Overlap (Geographic Analysis)</div>
+                                {% if stop.corridor_overlap and stop.corridor_overlap|length > 0 %}
+                                    <p style="font-size:0.85rem; color: var(--text-secondary);">
+                                        This stop falls within <strong>{{ stop.corridor_overlap|length }}</strong> existing service corridor(s):
+                                        {% for route in stop.corridor_overlap %}
+                                            <span class="badge badge-amber" style="margin-left:4px;">{{ route }}</span>
+                                        {% endfor %}
+                                    </p>
+                                {% else %}
+                                    <p class="no-data">No geographic corridor overlap detected for this stop.</p>
+                                {% endif %}
+
+                                <!-- Frequency Detail -->
+                                <div class="detail-section-title">📊 Frequency Analysis</div>
+                                <p style="font-size:0.85rem; color: var(--text-secondary);">
+                                    {% if stop.avg_headway_minutes %}
+                                        Average headway at this stop: <strong>{{ stop.avg_headway_minutes }} minutes</strong>.
+                                        Verdict: <strong>{{ stop.frequency_verdict | replace('_', ' ') | title }}</strong>.
+                                    {% else %}
+                                        No existing services at this stop — classified as <strong>underserved</strong>.
+                                    {% endif %}
+                                </p>
+
+                                <!-- Decision Rationale -->
+                                <div class="detail-section-title">📋 Decision Rationale</div>
+                                <p style="font-size:0.85rem; color: var(--text-secondary);">
+                                    {{ stop.recommendation }}
+                                </p>
+
+                            </div>
+                        </td>
+                    </tr>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="card empty-state" style="padding:40px;">
+        <div class="icon">🗺</div>
+        <h3>No existing routes share these stops</h3>
+        <p>None of the proposed stops were found in the loaded GTFS feed.</p>
+    </div>
+    {% endif %}
+=======
+    </details>
+>>>>>>> d2d039a (on the journey level)
+
+</div>
+
+
+{# ═══════════════════════════════════════════════════════════════════════
+   SECTION 3 — A→B JOURNEY COVERAGE ANALYSIS (primary signal)
+   ═══════════════════════════════════════════════════════════════════════ #}
+{% if od_coverage and od_coverage.total_pairs > 0 %}
+{% set od_load = od_coverage.load_signal | default('unknown') %}
+<div class="section animate-in" id="journey-analysis">
+    <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:4px;">
+        <h2 class="section-title" style="margin:0;">🔁 A→B Journey Coverage Analysis</h2>
+        <span style="font-size:0.7rem; font-weight:700; color:#fff; background:var(--accent-teal);
+                      padding:2px 10px; border-radius:20px; letter-spacing:0.04em;">PRIMARY SIGNAL</span>
+    </div>
+    <p style="color:var(--text-muted); font-size:0.78rem; margin:0 0 16px;">
+        For each proposed journey (origin → destination stop pair), the analysis checks whether passengers can already make the same trip on existing services.
+        This is the <strong>primary assessment signal</strong> — a shared stop does not make a route duplicative; only a shared <em>journey</em> does.
+    </p>
+
+    {# ── What this section does ──────────────────────────────────────────── #}
+    <div style="background:var(--bg); border:1px solid var(--border); border-radius:8px;
+                padding:14px 18px; margin-bottom:18px; font-size:0.8rem; color:var(--text-muted);">
+        <strong style="color:var(--text-primary); display:block; margin-bottom:8px;">How this analysis works</strong>
+        For every journey on the proposed route, the system works through three questions in order:
+
+        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:10px; margin-top:10px;">
+            <div style="border-left:3px solid var(--verdict-red); padding:8px 12px; background:rgba(239,68,68,0.05); border-radius:0 6px 6px 0;">
+                <strong style="color:var(--verdict-red);">Tier 1: Direct service</strong><br>
+                Can the passenger board at stop A and reach stop B on an <em>existing bus</em>,
+                in the same direction, at roughly the same time of day?<br>
+                <span style="font-size:0.72rem;">Strong signal against the new route.</span>
+            </div>
+            <div style="border-left:3px solid var(--verdict-amber); padding:8px 12px; background:rgba(251,191,36,0.07); border-radius:0 6px 6px 0;">
+                <strong style="color:var(--verdict-amber);">Tier 2: Two-leg interchange journey</strong><br>
+                No direct service, but could the passenger take an existing bus to an intermediate stop
+                and connect to a second existing service to reach their destination?<br>
+                <span style="font-size:0.72rem;">Moderate signal — journey is possible but requires an interchange.</span>
+            </div>
+            <div style="border-left:3px solid rgba(100,116,139,0.6); padding:8px 12px; background:rgba(100,116,139,0.05); border-radius:0 6px 6px 0;">
+                <strong style="color:var(--text-secondary);">Tier 3: Walk access</strong><br>
+                No direct or interchange service, but could the passenger walk ≤{{ (t.od_walk_radius_metres if t else 400) | int }} m
+                to a nearby stop and catch an existing bus to a stop near their destination?<br>
+                <span style="font-size:0.72rem;">Softer signal — journey is possible but inconvenient.</span>
+            </div>
+            <div style="border-left:3px solid var(--accent-teal); padding:8px 12px; background:rgba(0,137,123,0.06); border-radius:0 6px 6px 0;">
+                <strong style="color:var(--accent-teal);">Load check: is demand being met?</strong><br>
+                Even if covered by Tier 1, are existing services already running at capacity?
+                High demand and infrequent service means the new route fills a real gap.<br>
+                <span style="font-size:0.72rem;">Can soften the High overlap signal if existing supply is insufficient.</span>
+            </div>
+        </div>
+    </div>
+
+    {# ── Load signal banner ──────────────────────────────────────────────── #}
+    {% if od_load != 'unknown' %}
+    <div style="display:flex; align-items:center; gap:10px; padding:10px 16px; border-radius:8px; margin-bottom:16px; font-size:0.82rem;
+        {% if od_load == 'unmet_demand' %}background:rgba(34,197,94,0.08); border:1px solid rgba(34,197,94,0.3); color:var(--verdict-green);
+        {% elif od_load == 'overloaded' %}background:rgba(251,191,36,0.10); border:1px solid var(--verdict-amber); color:var(--verdict-amber);
+        {% elif od_load == 'low_demand' %}background:rgba(239,68,68,0.08); border:1px solid var(--verdict-red); color:var(--verdict-red);
+        {% else %}background:var(--bg-secondary); border:1px solid var(--border); color:var(--text-muted);{% endif %}">
+        {% if od_load == 'unmet_demand' %}
+            <span>📈</span>
+            <span><strong>Unmet demand signal:</strong> existing services are infrequent but passenger demand is high. The new route would fill a genuine gap in supply.</span>
+        {% elif od_load == 'overloaded' %}
+            <span>⚠</span>
+            <span><strong>Capacity pressure:</strong> existing services are frequent but demand is also high. Buses may be at or near capacity and a new route could relieve overcrowding.</span>
+        {% elif od_load == 'low_demand' %}
+            <span>📉</span>
+            <span><strong>Low demand signal:</strong> existing services on overlapping corridors carry low passenger volumes. A new route risks further thinning ridership without commercial justification.</span>
+        {% else %}
+            <span>📊</span>
+            <span><strong>Adequate supply:</strong> no strong evidence of either overcrowding or unmet demand on existing services.</span>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {# ── Summary cards ────────────────────────────────────────────────────── #}
+    <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:20px;">
+        <div class="card" style="padding:16px 20px; flex:1; min-width:120px; text-align:center;">
+            <div style="font-size:1.8rem; font-weight:700; color:var(--accent-teal);">{{ od_coverage.total_pairs }}</div>
+            <div style="font-size:0.72rem; color:var(--text-muted); margin-top:4px;">Total journeys checked</div>
+        </div>
+        <div class="card" style="padding:16px 20px; flex:1; min-width:120px; text-align:center; border-top:3px solid var(--verdict-red);">
+            {% set t1 = od_coverage.tier1_pairs | default(od_coverage.covered_pairs) %}
+            <div style="font-size:1.8rem; font-weight:700; color:{% if od_coverage.tier1_pct | default(od_coverage.coverage_pct) >= 60 %}var(--verdict-red){% elif od_coverage.tier1_pct | default(od_coverage.coverage_pct) >= 30 %}var(--verdict-amber){% else %}var(--text-primary){% endif %};">
+                {{ t1 }}
+            </div>
+            <div style="font-size:0.72rem; color:var(--text-muted); margin-top:4px;">
+                Tier 1: direct service ({{ od_coverage.tier1_pct | default(od_coverage.coverage_pct) }}%)
+            </div>
+        </div>
+        <div class="card" style="padding:16px 20px; flex:1; min-width:120px; text-align:center; border-top:3px solid var(--verdict-amber);">
+            {% set t2 = od_coverage.tier2_pairs | default(0) %}
+            <div style="font-size:1.8rem; font-weight:700; color:{% if t2 > 0 %}var(--verdict-amber){% else %}var(--text-muted){% endif %};">
+                {{ t2 }}
+            </div>
+            <div style="font-size:0.72rem; color:var(--text-muted); margin-top:4px;">
+                Tier 2: interchange journey ({{ od_coverage.tier2_pct | default(0) }}%)
+            </div>
+        </div>
+        <div class="card" style="padding:16px 20px; flex:1; min-width:120px; text-align:center; border-top:3px solid rgba(100,116,139,0.5);">
+            {% set t3 = od_coverage.tier3_pairs | default(0) %}
+            <div style="font-size:1.8rem; font-weight:700; color:{% if t3 > 0 %}var(--text-secondary){% else %}var(--text-muted){% endif %};">
+                {{ t3 }}
+            </div>
+            <div style="font-size:0.72rem; color:var(--text-muted); margin-top:4px;">
+                Tier 3: walk access ({{ od_coverage.tier3_pct | default(0) }}%)
+            </div>
+        </div>
+        <div class="card" style="padding:16px 20px; flex:1; min-width:120px; text-align:center; border-top:3px solid var(--accent-teal);">
+            <div style="font-size:1.8rem; font-weight:700; color:var(--verdict-green);">
+                {{ od_coverage.uncovered_pairs | default(0) }}
+            </div>
+            <div style="font-size:0.72rem; color:var(--text-muted); margin-top:4px;">Not covered by any tier</div>
+        </div>
+        <div class="card" style="padding:16px 20px; flex:1; min-width:120px; text-align:center;">
+            <div style="font-size:1.8rem; font-weight:700;
+                color:{% if od_coverage.band_matched_pairs > 0 %}var(--verdict-red){% else %}var(--text-muted){% endif %};">
+                {{ od_coverage.band_matched_pairs }}
+            </div>
+            <div style="font-size:0.72rem; color:var(--text-muted); margin-top:4px;">Tier 1 same time band</div>
+        </div>
+    </div>
+
+    {# Demand data status notice #}
+    {% if od_coverage.demand_loaded %}
+    <div style="display:flex; align-items:center; gap:8px; font-size:0.78rem; color:var(--text-muted);
+                background:rgba(0,137,123,0.06); border:1px solid rgba(0,137,123,0.2);
+                border-radius:8px; padding:8px 14px; margin-bottom:14px;">
+        <span style="color:var(--accent-teal);">📊</span>
+        <span>Passenger demand data loaded. Pax/hr and load signal are shown in the table below.</span>
+        <a href="/download/demand-template" style="margin-left:auto; font-size:0.72rem; color:var(--accent-teal); text-decoration:none;">⬇ Download template</a>
+    </div>
+    {% else %}
+    <div style="display:flex; align-items:center; gap:8px; font-size:0.78rem; color:var(--text-muted);
+                background:var(--bg-secondary); border:1px solid var(--border-color);
+                border-radius:8px; padding:8px 14px; margin-bottom:14px;">
+        <span>📊</span>
+        <span>No passenger demand data. Upload a demand file from the dashboard to enable the load signal check.</span>
+        <a href="/" style="margin-left:auto; font-size:0.72rem; color:var(--accent-teal); text-decoration:none;">Upload demand file</a>
+    </div>
+    {% endif %}
+
+    {# OD pairs table — sortable #}
+    {% if od_coverage.od_results %}
+    <div class="card" style="padding:0;">
+        <div style="padding:12px 16px; border-bottom:1px solid var(--border); font-size:0.8rem; color:var(--text-muted);">
+            {{ od_coverage.od_results | length }} journey pair(s) assessed. Click a column header to sort.
+        </div>
+        <div class="table-wrap">
+            <table id="od-table">
+                <thead>
+                    <tr>
+                        <th class="od-sortable" data-col="from" style="cursor:pointer; user-select:none;" title="Sort by origin stop">From Stop <span class="od-sort-arrow"></span></th>
+                        <th class="od-sortable" data-col="to" style="cursor:pointer; user-select:none;" title="Sort by destination stop">To Stop <span class="od-sort-arrow"></span></th>
+                        <th class="od-sortable" data-col="dep" style="cursor:pointer; user-select:none;" title="Sort by departure time">Dep. <span class="od-sort-arrow"></span></th>
+                        <th class="od-sortable" data-col="band" style="cursor:pointer; user-select:none;" title="Sort by time band">Band <span class="od-sort-arrow"></span></th>
+                        <th class="od-sortable" data-col="tier" style="cursor:pointer; user-select:none;" title="Sort by coverage tier (lower = stronger existing service)">Coverage Tier <span class="od-sort-arrow"></span></th>
+                        <th>Existing Service</th>
+                        <th class="od-sortable" data-col="headway" style="cursor:pointer; user-select:none;" title="Sort by headway">Headway <span class="od-sort-arrow"></span></th>
+                        <th class="od-sortable" data-col="demand" style="cursor:pointer; user-select:none;" title="Sort by demand">Demand (pax/hr) <span class="od-sort-arrow"></span></th>
+                        <th>Load</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for od in od_coverage.od_results %}
+                <tr data-from="{{ od.from_stop_name | lower }}"
+                    data-to="{{ od.to_stop_name | lower }}"
+                    data-dep="{{ od.proposed_departure or '' }}"
+                    data-band="{{ od.service_band or '' }}"
+                    data-tier="{{ od.coverage_tier if od.coverage_tier else 99 }}"
+                    data-headway="{{ od.avg_headway_min | int if od.avg_headway_min else 9999 }}"
+                    data-demand="{{ od.pax_per_hour | int if od.has_demand_data else -1 }}">
+                    <td>
+                        <strong>{{ od.from_stop_name }}</strong>
+                        <div style="font-size:0.7rem; color:var(--text-muted); font-family:monospace;">{{ od.from_stop_id }}</div>
+                    </td>
+                    <td>
+                        <strong>{{ od.to_stop_name }}</strong>
+                        <div style="font-size:0.7rem; color:var(--text-muted); font-family:monospace;">{{ od.to_stop_id }}</div>
+                    </td>
+                    <td style="font-family:monospace; font-weight:600; color:var(--accent-teal); white-space:nowrap;">{{ od.proposed_departure }}</td>
+                    <td><span class="band-badge">{{ od.service_band | replace('_',' ') | title }}</span></td>
+                    <td style="text-align:center;">
+                        {% if od.coverage_tier == 1 and od.same_band_covered %}
+                            <span class="badge badge-red" style="font-size:0.7rem;" title="Direct service in same time band — strongest signal against">Tier 1 ⚠</span>
+                        {% elif od.coverage_tier == 1 %}
+                            <span class="badge badge-amber" style="font-size:0.7rem;" title="Direct service exists but in a different time band">Tier 1 (different band)</span>
+                        {% elif od.coverage_tier == 2 %}
+                            <span class="badge badge-amber" style="font-size:0.7rem;"
+                                title="Transfer at {{ od.tier2_transfer_stop or '?' }}, approx {{ od.tier2_transfer_wait_min or '?' }} min wait">
+                                Tier 2 🔄
+                            </span>
+                        {% elif od.coverage_tier == 3 %}
+                            <span class="badge badge-amber" style="font-size:0.7rem; opacity:0.8;"
+                                title="Walk {{ od.walk_origin_dist_m | int if od.walk_origin_dist_m else '?' }}m to {{ od.walk_origin_stop }}">
+                                Tier 3 🚶
+                            </span>
+                        {% else %}
+                            <span style="color:var(--verdict-green); font-size:0.75rem;">✓ Not covered</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if od.coverage_tier == 2 and od.tier2_leg1_route %}
+                            <span class="route-chip" title="{{ od.tier2_leg1_route.route_id }} ({{ od.tier2_leg1_route.operator }})">{{ od.tier2_leg1_route.route_label }}</span>
+                            <span style="color:var(--text-muted); font-size:0.75rem; margin:0 3px;">🔄</span>
+                            <span class="route-chip" title="{{ od.tier2_leg2_route.route_id }} ({{ od.tier2_leg2_route.operator }})">{{ od.tier2_leg2_route.route_label }}</span>
+                            <div style="font-size:0.68rem; color:var(--text-muted); margin-top:2px;">
+                                Transfer at {{ od.tier2_transfer_stop }},
+                                approx {{ od.tier2_transfer_wait_min | int if od.tier2_transfer_wait_min else '?' }} min wait
+                            </div>
+                        {% elif od.coverage_tier == 3 and od.tier3_route %}
+                            <span class="route-chip" title="{{ od.tier3_route.route_id }} ({{ od.tier3_route.operator }}) walk access">{{ od.tier3_route.route_label }} 🚶</span>
+                            <div style="font-size:0.68rem; color:var(--text-muted); margin-top:2px;">
+                                Walk {{ od.walk_origin_dist_m | int if od.walk_origin_dist_m else '?' }}m to {{ od.walk_origin_stop }},
+                                alight {{ od.walk_dest_stop }}, walk {{ od.walk_dest_dist_m | int if od.walk_dest_dist_m else '?' }}m
+                            </div>
+                        {% else %}
+                            {% for r in od.covering_routes %}
+                                <span class="route-chip" title="{{ r.route_id }} ({{ r.operator }})">{{ r.route_label }}</span>
+                            {% endfor %}
+                        {% endif %}
+                    </td>
+                    <td style="text-align:center; font-size:0.8rem; color:var(--text-muted);">
+                        {% if od.avg_headway_min %}
+                            {{ od.avg_headway_min | int }} min
+                        {% else %}—{% endif %}
+                    </td>
+                    <td style="text-align:right; font-family:monospace; font-size:0.82rem;">
+                        {% if od.has_demand_data %}
+                            <span style="color:var(--accent-teal); font-weight:700;">{{ od.pax_per_hour | int }}</span>
+                        {% else %}
+                            <span style="color:var(--text-muted); font-size:0.72rem;">No data</span>
+                        {% endif %}
+                    </td>
+                    <td style="text-align:center; font-size:0.75rem;">
+                        {% if od.load_signal == 'unmet_demand' %}
+                            <span style="color:var(--verdict-green);" title="High demand and infrequent service: gap in supply">📈 Unmet</span>
+                        {% elif od.load_signal == 'overloaded' %}
+                            <span style="color:var(--verdict-amber);" title="High demand and frequent service: possible capacity pressure">⚠ Capacity</span>
+                        {% elif od.load_signal == 'low_demand' %}
+                            <span style="color:var(--verdict-red);" title="Low demand: new route risks cannibalising sparse ridership">📉 Low</span>
+                        {% elif od.load_signal == 'adequate' %}
+                            <span style="color:var(--text-muted);">✓ OK</span>
+                        {% else %}
+                            <span style="color:var(--text-muted);">—</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endif %}
+
+
+{# ═══════════════════════════════════════════════════════════════════════
+   SECTION 4 — NEARBY EXISTING ROUTES (map + merged table)
+   ═══════════════════════════════════════════════════════════════════════ #}
+<div class="section animate-in">
+
+    <h2 class="section-title">🗺 Closest Existing Routes</h2>
+    <p style="color:var(--text-muted); font-size:0.8rem; margin-bottom:16px;">
+        Existing GTFS routes that share stops with the proposed route, ranked by stop overlap.
+        Conflict flags indicate routes that also triggered a timing or corridor clash at one or more stops.
+        Stop overlap % is a geographic indicator only — use the A→B journey analysis above as the primary signal.
+    </p>
+
+    {% if map_data and map_data.proposed_stops %}
+    <div class="card" style="padding:0; overflow:hidden; margin-bottom:20px;">
+        <div id="route-map" style="height:420px; width:100%;"></div>
+    </div>
+    {% endif %}
+
+    {# Build a set of route_ids covered by nearby_routes so we can append flagged-only routes #}
+    {% set nearby_ids = nearby_routes | map(attribute='route_id') | list %}
+
+    {% if nearby_routes or considered_routes %}
+    <div class="card" style="padding:0;">
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Route</th>
+                        <th>Operator</th>
+                        <th style="text-align:center;">Shared Stops</th>
+                        <th style="text-align:center;">Stop Overlap</th>
+                        <th>Shared Stop Names</th>
+                        <th>Conflict Flags</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {# ── Routes found in nearby_routes (may also have conflict flags) ── #}
+                {% for route in nearby_routes %}
+                {% set cr = considered_routes | selectattr('route_id','equalto',route.route_id) | list | first | default(none) %}
+                <tr>
+                    <td>
+                        <strong>{{ route.route_label }}</strong>
+                        <div style="font-size:0.7rem; color:var(--text-muted); font-family:monospace;">{{ route.route_id }}</div>
+                    </td>
+                    <td style="color:var(--text-secondary); font-size:0.85rem;">{{ route.operator }}</td>
+                    <td style="text-align:center; font-weight:700;
+                        color:{% if route.overlap_pct >= 75 %}var(--verdict-red){% elif route.overlap_pct >= 40 %}var(--verdict-amber){% else %}var(--text-primary){% endif %};">
+                        {{ route.shared_stops }}
+                        <div style="font-size:0.7rem; font-weight:400; color:var(--text-muted);">of {{ route.total_gtfs_stops }} total</div>
+                    </td>
+                    <td style="text-align:center;">
+                        <span style="font-weight:700; font-size:0.9rem;
+                            color:{% if route.overlap_pct >= 75 %}var(--verdict-red){% elif route.overlap_pct >= 40 %}var(--verdict-amber){% else %}var(--verdict-green){% endif %};">
+                            {{ route.overlap_pct }}%
+                        </span>
+                    </td>
+                    <td style="font-size:0.78rem; color:var(--text-secondary); max-width:260px;">
+                        {% if route.shared_stop_names %}
+                            {{ route.shared_stop_names | join(', ') }}
+                        {% else %}—{% endif %}
+                    </td>
+                    <td>
+                        {% if cr %}
+                            {% for ct in cr.conflict_types %}
+                                {% if ct == 'timing' %}
+                                    <span class="badge badge-red" style="font-size:0.7rem; margin-right:3px;">⏱ Timing</span>
+                                {% elif ct == 'corridor' %}
+                                    <span class="badge badge-amber" style="font-size:0.7rem; margin-right:3px;">📍 Corridor</span>
+                                {% endif %}
+                            {% endfor %}
+                            {% if cr.affected_stops %}
+                            <div style="font-size:0.7rem; color:var(--text-muted); margin-top:3px;">
+                                at: {{ cr.affected_stops | join(', ') }}
+                            </div>
+                            {% endif %}
+                        {% else %}
+                            <span style="color:var(--text-muted); font-size:0.75rem;">—</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                {# ── Routes only in considered_routes (no stop-overlap data) ── #}
+                {% for cr in considered_routes %}
+                {% if cr.route_id not in nearby_ids %}
+                <tr>
+                    <td>
+                        <strong>{{ cr.route_label }}</strong>
+                        <div style="font-size:0.7rem; color:var(--text-muted); font-family:monospace;">{{ cr.route_id }}</div>
+                    </td>
+                    <td style="color:var(--text-secondary); font-size:0.85rem;">{{ cr.operator }}</td>
+                    <td style="text-align:center; color:var(--text-muted);">—</td>
+                    <td style="text-align:center; color:var(--text-muted);">—</td>
+                    <td style="font-size:0.78rem; color:var(--text-muted);">
+                        {{ cr.affected_stops | join(', ') if cr.affected_stops else '—' }}
+                    </td>
+                    <td>
+                        {% for ct in cr.conflict_types %}
+                            {% if ct == 'timing' %}
+                                <span class="badge badge-red" style="font-size:0.7rem; margin-right:3px;">⏱ Timing</span>
+                            {% elif ct == 'corridor' %}
+                                <span class="badge badge-amber" style="font-size:0.7rem; margin-right:3px;">📍 Corridor</span>
+                            {% endif %}
+                        {% endfor %}
+                    </td>
+                </tr>
+                {% endif %}
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% else %}
+    <div class="card empty-state" style="padding:40px;">
+        <div class="icon">🗺</div>
+        <h3>No existing routes share these stops</h3>
+        <p>None of the proposed stops were found in the loaded GTFS feed.</p>
+    </div>
+    {% endif %}
+
+</div>
+
+
+{# ═══════════════════════════════════════════════════════════════════════
+   SECTION 5 — EXPORT
+   ═══════════════════════════════════════════════════════════════════════ #}
+<div class="section animate-in">
+    <div class="card">
+        <div class="card-header">
+            <div class="card-title">📤 Export</div>
+        </div>
+        <div style="display:flex; gap:12px; flex-wrap:wrap;">
+            <a href="/results/{{ result.route_id }}/timetable"
+               style="text-decoration:none; display:inline-block; padding:10px 20px; background:linear-gradient(135deg,#065f46,#047857); color:#fff; border-radius:var(--radius-sm); font-weight:600; font-size:0.875rem;">
+                📋 Full Timetable View
+            </a>
+            <a href="/api/v1/results/{{ result.route_id }}"
+               target="_blank"
+               style="text-decoration:none; display:inline-block; padding:10px 20px; background:linear-gradient(135deg,#1e40af,#1d4ed8); color:#fff; border-radius:var(--radius-sm); font-weight:600; font-size:0.875rem;">
+                { } Raw JSON
+            </a>
+            <a href="/api/v1/powerbi/export?format=csv"
+               style="text-decoration:none; display:inline-block; padding:10px 20px; background:linear-gradient(135deg,var(--accent-teal),var(--accent-blue)); color:#fff; border-radius:var(--radius-sm); font-weight:600; font-size:0.875rem;">
+                ⬇ Download CSV
+            </a>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+
+{% block scripts %}
+{% if map_data and map_data.proposed_stops %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+/* Google Maps style controls */
+#route-map { font-family: 'Google Sans', Roboto, Arial, sans-serif; }
+#route-map .leaflet-control-zoom a {
+    background: #fff;
+    color: #666;
+    border: none;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+    font-size: 18px;
+    line-height: 28px;
+    width: 28px;
+    height: 28px;
+}
+#route-map .leaflet-control-zoom a:hover { background: #f5f5f5; color: #333; }
+#route-map .leaflet-control-zoom { border: none; box-shadow: 0 1px 4px rgba(0,0,0,0.3); border-radius: 2px; }
+#route-map .leaflet-tooltip {
+    background: #fff;
+    border: none;
+    border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.22);
+    padding: 8px 12px;
+    font-family: Roboto, Arial, sans-serif;
+    font-size: 0.78rem;
+    color: #3c4043;
+}
+#route-map .leaflet-tooltip::before { display: none; }
+#route-map .leaflet-attribution-flag { display: none; }
+#route-map .leaflet-control-attribution {
+    background: rgba(255,255,255,0.85);
+    color: #777;
+    font-size: 0.65rem;
+    border-radius: 2px 0 0 0;
+}
+</style>
+<script>
+(function () {
+    const mapData = {{ map_data | tojson }};
+    if (!mapData.proposed_stops.length) return;
+
+    const map = L.map('route-map', { zoomControl: true });
+
+    // CartoDB Voyager — closest free equivalent to Google Maps style
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+        subdomains: 'abcd',
+        maxZoom: 19,
+    }).addTo(map);
+
+    const verdictColour   = { GREEN: '#1e8e3e', AMBER: '#f29900', RED: '#d93025' };
+    const verdictBorder   = { GREEN: '#fff',    AMBER: '#fff',    RED: '#fff'    };
+    const verdictLabel    = { GREEN: 'Low overlap', AMBER: 'Moderate overlap', RED: 'High overlap' };
+
+    // Nearby route polylines — drawn first so they sit behind the proposed route
+    (mapData.nearby_lines || []).forEach(route => {
+        if (!route.coords.length) return;
+        L.polyline(route.coords, {
+            color: route.colour,
+            weight: 4,
+            opacity: 0.65,
+            dashArray: '8 5',
+        }).addTo(map).bindTooltip(
+            `<strong style="color:#3c4043">${route.route_label}</strong><br>
+             <span style="color:#80868b">${route.operator}</span>`,
+            { sticky: true }
+        );
+    });
+
+    // Proposed route line — Google Maps blue
+    const proposedCoords = mapData.proposed_stops.map(s => [s.lat, s.lon]);
+    L.polyline(proposedCoords, {
+        color: '#1A73E8',
+        weight: 5,
+        opacity: 0.92,
+    }).addTo(map);
+
+    // Stop markers colour-coded by verdict
+    mapData.proposed_stops.forEach(stop => {
+        const fill   = verdictColour[stop.verdict]  || '#9aa0a6';
+        const border = verdictBorder[stop.verdict]  || '#fff';
+        const label  = verdictLabel[stop.verdict]   || stop.verdict || 'Unknown';
+        const marker = L.circleMarker([stop.lat, stop.lon], {
+            radius: 8,
+            fillColor: fill,
+            color: border,
+            weight: 2.5,
+            opacity: 1,
+            fillOpacity: 1,
+        }).addTo(map);
+        marker.bindTooltip(
+            `<strong style="color:#3c4043;font-size:0.82rem">${stop.stop_name}</strong><br>
+             <span style="color:${fill};font-weight:600">${label}</span><br>
+             <span style="color:#9aa0a6;font-size:0.68rem;font-family:monospace">${stop.stop_id}</span>`,
+            { direction: 'top', offset: [0, -10] }
+        );
+    });
+
+    // Fit map to proposed route bounds
+    map.fitBounds(L.latLngBounds(proposedCoords).pad(0.18));
+
+    // Legend — Google Maps info-panel style (white card, dark text)
+    const legend = L.control({ position: 'bottomright' });
+    legend.onAdd = () => {
+        const div = L.DomUtil.create('div');
+        div.style.cssText = [
+            'background:#fff',
+            'padding:10px 14px',
+            'border-radius:8px',
+            'font-size:0.72rem',
+            'color:#3c4043',
+            'line-height:1.9',
+            'min-width:180px',
+            'box-shadow:0 2px 6px rgba(0,0,0,0.22)',
+            'font-family:Roboto,Arial,sans-serif',
+        ].join(';');
+
+        const nearbyRows = (mapData.nearby_lines || []).map(r =>
+            `<div style="display:flex;align-items:center;gap:6px;">
+               <span style="display:inline-block;width:20px;height:3px;background:${r.colour};
+                             border-radius:2px;flex-shrink:0;opacity:0.75;"></span>
+               <strong>${r.route_label}</strong>
+               <span style="color:#9aa0a6;font-size:0.66rem">${r.operator}</span>
+             </div>`
+        ).join('');
+
+        div.innerHTML = `
+            <div style="font-weight:700;font-size:0.7rem;text-transform:uppercase;
+                         letter-spacing:0.06em;color:#9aa0a6;margin-bottom:5px;">Proposed Route</div>
+            <div style="display:flex;align-items:center;gap:6px;margin-bottom:${nearbyRows ? 8 : 0}px;">
+                <span style="display:inline-block;width:20px;height:4px;background:#1A73E8;
+                              border-radius:2px;flex-shrink:0;"></span>
+                <strong>{{ result.route_id }}</strong>
+            </div>
+            ${nearbyRows ? `
+            <div style="border-top:1px solid #e8eaed;padding-top:7px;margin-top:2px;">
+                <div style="font-weight:700;font-size:0.7rem;text-transform:uppercase;
+                             letter-spacing:0.06em;color:#9aa0a6;margin-bottom:5px;">Existing Routes</div>
+                ${nearbyRows}
+            </div>` : ''}
+            <div style="border-top:1px solid #e8eaed;padding-top:7px;margin-top:7px;">
+                <div style="font-weight:700;font-size:0.7rem;text-transform:uppercase;
+                             letter-spacing:0.06em;color:#9aa0a6;margin-bottom:4px;">Stop overlap</div>
+                <div style="display:flex;align-items:center;gap:5px;">
+                    <span style="display:inline-block;width:10px;height:10px;border-radius:50%;
+                                  background:#1e8e3e;border:2px solid #fff;
+                                  box-shadow:0 0 0 1px #1e8e3e;flex-shrink:0;"></span>
+                    <span>Low overlap</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:5px;">
+                    <span style="display:inline-block;width:10px;height:10px;border-radius:50%;
+                                  background:#f29900;border:2px solid #fff;
+                                  box-shadow:0 0 0 1px #f29900;flex-shrink:0;"></span>
+                    <span>Moderate overlap</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:5px;">
+                    <span style="display:inline-block;width:10px;height:10px;border-radius:50%;
+                                  background:#d93025;border:2px solid #fff;
+                                  box-shadow:0 0 0 1px #d93025;flex-shrink:0;"></span>
+                    <span>High overlap</span>
+                </div>
+            </div>`;
+        return div;
+    };
+    legend.addTo(map);
+})();
+</script>
+{% endif %}
+<style>
+/* ── Timetable (Route NX style) ──────────────────────────────────────── */
+.tt-dir-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+.tt-dir-badge {
+    width: 24px; height: 24px;
+    background: var(--accent-teal);
+    color: #000;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.72rem; font-weight: 800;
+    flex-shrink: 0;
+}
+.tt-dir-title {
+    font-size: 0.95rem; font-weight: 700; color: var(--text-primary);
+}
+.tt-dir-meta {
+    font-size: 0.75rem; color: var(--text-muted);
+}
+.tt-scroll-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+}
+.tt-nx {
+    border-collapse: collapse;
+    font-size: 0.8rem;
+    white-space: nowrap;
+    min-width: 100%;
+}
+.tt-nx-stop-head {
+    position: sticky; left: 0; z-index: 3;
+    background: var(--bg-secondary);
+    text-align: left;
+    padding: 8px 14px 8px 16px;
+    font-size: 0.7rem; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--text-muted);
+    border-bottom: 2px solid var(--border-color);
+    border-right: 1px solid var(--border-color);
+    min-width: 180px;
+}
+.tt-nx-id-head {
+    position: sticky; left: 180px; z-index: 3;
+    background: var(--bg-secondary);
+    text-align: left;
+    padding: 8px 12px;
+    font-size: 0.7rem; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--text-muted);
+    border-bottom: 2px solid var(--border-color);
+    border-right: 1px solid var(--border-color);
+    min-width: 80px;
+}
+.tt-nx-time-head {
+    background: var(--bg-secondary);
+    text-align: center;
+    padding: 8px 6px;
+    font-size: 0.65rem; text-transform: uppercase;
+    letter-spacing: 0.04em; color: var(--text-muted);
+    border-bottom: 2px solid var(--border-color);
+    min-width: 52px;
+}
+.tt-nx-stop-cell {
+    position: sticky; left: 0; z-index: 1;
+    background: var(--bg-card);
+    padding: 7px 14px 7px 16px;
+    font-weight: 600; color: var(--text-primary);
+    border-bottom: 1px solid var(--border-color);
+    border-right: 1px solid var(--border-color);
+    min-width: 180px;
+}
+.tt-nx-id-cell {
+    position: sticky; left: 180px; z-index: 1;
+    background: var(--bg-card);
+    padding: 7px 12px;
+    font-family: monospace; font-size: 0.72rem; color: var(--text-muted);
+    border-bottom: 1px solid var(--border-color);
+    border-right: 1px solid var(--border-color);
+    min-width: 80px;
+}
+.tt-nx-time-cell {
+    text-align: center;
+    padding: 7px 4px;
+    font-family: monospace; font-size: 0.8rem; font-weight: 700;
+    border-bottom: 1px solid var(--border-color);
+    border-right: 1px solid rgba(148,163,184,0.05);
+    min-width: 52px;
+    color: var(--text-primary);
+}
+.tt-nx-odd .tt-nx-stop-cell,
+.tt-nx-odd .tt-nx-id-cell {
+    background: var(--bg-card-hover);
+}
+.tt-nx-odd .tt-nx-time-cell { background: rgba(255,255,255,0.01); }
+
+/* verdict colouring */
+.tt-nx-green { color: var(--verdict-green); background: rgba(34,197,94,0.07); }
+.tt-nx-amber { color: var(--verdict-amber); background: rgba(245,158,11,0.07); }
+.tt-nx-red   { color: var(--verdict-red);   background: rgba(239,68,68,0.07); }
+.tt-nx-none  { color: var(--text-muted); }
+
+/* legend pills */
+.leg-pill {
+    display: inline-flex; align-items: center; gap:4px;
+    font-size: 0.72rem; padding: 3px 10px; border-radius: 100px;
+}
+.lp-green { background:rgba(34,197,94,0.1);   color:var(--verdict-green);  border:1px solid rgba(34,197,94,0.2); }
+.lp-amber { background:rgba(245,158,11,0.1);  color:var(--verdict-amber);  border:1px solid rgba(245,158,11,0.2); }
+.lp-red   { background:rgba(239,68,68,0.1);   color:var(--verdict-red);    border:1px solid rgba(239,68,68,0.2); }
+
+/* ── Filter bar ──────────────────────────────────────────────────────── */
+.filter-bar {
+    display: flex; align-items: flex-end; flex-wrap: wrap;
+    gap: 12px; margin-bottom: 14px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 14px 16px;
+}
+.filter-bar-item { display:flex; flex-direction:column; gap:4px; }
+.filter-label { font-size:0.65rem; text-transform:uppercase; letter-spacing:0.07em; color:var(--text-muted); }
+.filter-input, .filter-select {
+    background: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 0.8rem;
+    padding: 6px 10px;
+    outline: none;
+    min-width: 130px;
+}
+.filter-input:focus, .filter-select:focus {
+    border-color: var(--accent-teal);
+}
+.filter-reset-btn {
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    padding: 6px 14px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.filter-reset-btn:hover { border-color:var(--accent-teal); color:var(--accent-teal); }
+.filter-count-display {
+    margin-left: auto; font-size: 0.75rem; color: var(--text-muted);
+    align-self: flex-end; padding-bottom: 6px;
+}
+
+/* ── Analysis table sort arrows ─────────────────────────────────────── */
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--accent-teal); }
+.sort-arrow { font-size: 0.65rem; margin-left: 3px; color: var(--text-muted); }
+th.sort-asc  .sort-arrow::after { content: " ▲"; color: var(--accent-teal); }
+th.sort-desc .sort-arrow::after { content: " ▼"; color: var(--accent-teal); }
+
+/* ── Risk number ─────────────────────────────────────────────────────── */
+.risk-num {
+    display: inline-block; padding: 2px 8px; border-radius: 100px;
+    font-size: 0.75rem; font-weight: 700; font-family: monospace;
+}
+.risk-low  { background:rgba(34,197,94,0.12);  color:var(--verdict-green); }
+.risk-mid  { background:rgba(245,158,11,0.12); color:var(--verdict-amber); }
+.risk-high { background:rgba(239,68,68,0.12);  color:var(--verdict-red); }
+
+/* ── Band badge ──────────────────────────────────────────────────────── */
+.band-badge {
+    font-size: 0.7rem; color: var(--text-muted);
+    background: var(--bg-secondary);
+    padding: 2px 7px; border-radius: 4px;
+}
+
+/* ── Stop breakdown bar ──────────────────────────────────────────────── */
+.stop-breakdown-bar {
+    display: flex;
+    height: 18px;
+    border-radius: 4px;
+    overflow: hidden;
+    min-width: 80px;
+    gap: 1px;
+}
+.sb-seg {
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.65rem; font-weight: 700;
+    min-width: 14px;
+}
+.sb-green { background: rgba(34,197,94,0.25);  color: var(--verdict-green); }
+.sb-amber { background: rgba(245,158,11,0.25); color: var(--verdict-amber); }
+.sb-red   { background: rgba(239,68,68,0.25);  color: var(--verdict-red); }
+
+/* ── Expand button ───────────────────────────────────────────────────── */
+.expand-btn {
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    padding: 3px 8px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.expand-btn:hover { border-color: var(--accent-teal); color: var(--accent-teal); }
+.expand-btn.open { color: var(--accent-teal); transform: rotate(90deg); }
+
+/* ── Stop detail sub-table ───────────────────────────────────────────── */
+.stop-detail-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+    background: var(--bg-secondary);
+}
+.stop-detail-table th {
+    padding: 6px 10px;
+    font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    font-weight: 600;
+    white-space: nowrap;
+}
+.stop-detail-table td {
+    padding: 6px 10px;
+    border-bottom: 1px solid rgba(148,163,184,0.06);
+    color: var(--text-secondary);
+}
+.stop-detail-table tr:last-child td { border-bottom: none; }
+
+/* ── Nearby routes grid ─────────────────────────────────────────────── */
+.nearby-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 14px;
+}
+.nearby-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 16px 18px;
+    transition: border-color 0.2s;
+}
+.nearby-card:hover { border-color: var(--border-glow); }
+.nearby-card-header {
+    display: flex; align-items: center;
+    justify-content: space-between; margin-bottom: 6px;
+}
+.nearby-route-id {
+    font-size: 1.05rem; font-weight: 800; color: var(--accent-teal);
+    font-family: monospace;
+}
+.nearby-overlap-pct {
+    font-size: 0.72rem; font-weight: 700; padding: 3px 9px; border-radius: 100px;
+}
+.overlap-high { background:rgba(34,197,94,0.12);  color:var(--verdict-green); }
+.overlap-mid  { background:rgba(245,158,11,0.12); color:var(--verdict-amber); }
+.overlap-low  { background:rgba(239,68,68,0.12);  color:var(--verdict-red); }
+
+.nearby-operator { font-size: 0.8rem; color:var(--text-secondary); margin-bottom: 10px; }
+.nearby-stat-row { display:flex; gap:14px; margin-bottom:10px; }
+.nearby-stat { font-size:0.75rem; color:var(--text-muted); }
+.nearby-stat strong { color:var(--text-primary); }
+.nearby-stops-label { font-size:0.65rem; text-transform:uppercase; letter-spacing:0.06em; color:var(--text-muted); margin-bottom:5px; }
+.nearby-stop-list { display:flex; flex-wrap:wrap; gap:5px; }
+.nearby-stop-chip {
+    font-size: 0.7rem; padding: 2px 8px; border-radius: 100px;
+    background: var(--bg-secondary); color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+}
+</style>
+
+<script>
+// ── Trip table: sort, filter, expand ─────────────────────────────────────
+let sortCol = null;
+let sortDir = 'asc';
+
+// Sort
+document.querySelectorAll('#analysis-table th.sortable').forEach(th => {
+    th.addEventListener('click', () => {
+        const col = th.dataset.col;
+        if (sortCol === col) {
+            sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+            sortCol = col;
+            sortDir = 'asc';
+        }
+        document.querySelectorAll('#analysis-table th.sortable').forEach(h => {
+            h.classList.remove('sort-asc', 'sort-desc');
+        });
+        th.classList.add(sortDir === 'asc' ? 'sort-asc' : 'sort-desc');
+        applyTableState();
+    });
+});
+
+// Filter inputs
+['f-section', 'f-verdict'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.addEventListener('input', applyTableState);
+});
+
+function resetFilters() {
+    document.getElementById('f-section').value = '';
+    document.getElementById('f-verdict').value = '';
+    sortCol = null; sortDir = 'asc';
+    document.querySelectorAll('#analysis-table th.sortable').forEach(h => {
+        h.classList.remove('sort-asc', 'sort-desc');
+    });
+    applyTableState();
+}
+
+function applyTableState() {
+    const section = (document.getElementById('f-section').value || '').toLowerCase();
+    const verdict = (document.getElementById('f-verdict').value || '').toUpperCase();
+
+    const tbody    = document.getElementById('analysis-tbody');
+    const tripRows = Array.from(tbody.querySelectorAll('tr.trip-row'));
+
+    let visible = 0;
+    tripRows.forEach(row => {
+        const matchSection = !section || row.dataset.section.includes(section);
+        const matchVerdict = !verdict || row.dataset.verdict === verdict;
+        const show = matchSection && matchVerdict;
+
+        row.style.display = show ? '' : 'none';
+
+        // Keep the associated stop-detail row in sync
+        const detailId = row.dataset.tripId;
+        const detailRow = detailId ? document.getElementById(detailId) : null;
+        if (detailRow && !show) detailRow.style.display = 'none';
+
+        if (show) visible++;
+    });
+
+    // Sort visible trip rows (re-insert pairs: trip row + its detail row)
+    if (sortCol) {
+        const pairs = tripRows
+            .filter(r => r.style.display !== 'none')
+            .map(r => ({
+                tripRow:   r,
+                detailRow: document.getElementById(r.dataset.tripId),
+            }));
+
+        pairs.sort((a, b) => {
+            let av = a.tripRow.dataset[colToDataAttr(sortCol)];
+            let bv = b.tripRow.dataset[colToDataAttr(sortCol)];
+            if (['trip', 'stops'].includes(sortCol)) {
+                av = parseFloat(av) || 0;
+                bv = parseFloat(bv) || 0;
+                return sortDir === 'asc' ? av - bv : bv - av;
+            }
+            av = av || ''; bv = bv || '';
+            return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av);
+        });
+
+        pairs.forEach(({ tripRow, detailRow }) => {
+            tbody.appendChild(tripRow);
+            if (detailRow) tbody.appendChild(detailRow);
+        });
+    }
+
+    const empty   = document.getElementById('table-empty');
+    if (empty)   empty.style.display = visible === 0 ? 'block' : 'none';
+    const countEl = document.getElementById('row-count');
+    if (countEl) countEl.textContent = `Showing ${visible} of ${tripRows.length} trips`;
+}
+
+function colToDataAttr(col) {
+    const map = { section:'section', trip:'trip', depart:'depart',
+                  stops:'stops', verdict:'verdict' };
+    return map[col] || col;
+}
+
+function toggleStops(tripId) {
+    const detailRow = document.getElementById(tripId);
+    if (!detailRow) return;
+    const isOpen = detailRow.style.display !== 'none';
+    detailRow.style.display = isOpen ? 'none' : 'table-row';
+
+    // Rotate the expand button
+    const tripRow = document.querySelector(`tr[data-trip-id="${tripId}"]`);
+    if (tripRow) {
+        const btn = tripRow.querySelector('.expand-btn');
+        if (btn) btn.classList.toggle('open', !isOpen);
+    }
+}
+
+// Initialise
+applyTableState();
+</script>
+
+<script>
+// ── OD pairs table: sortable columns ──────────────────────────────────
+(function () {
+    const table = document.getElementById('od-table');
+    if (!table) return;
+
+    let sortCol = 'tier';
+    let sortAsc = true;
+
+    function updateArrows() {
+        table.querySelectorAll('th.od-sortable').forEach(th => {
+            const arrow = th.querySelector('.od-sort-arrow');
+            if (!arrow) return;
+            if (th.dataset.col === sortCol) {
+                arrow.textContent = sortAsc ? ' ▲' : ' ▼';
+                th.style.color = 'var(--accent-teal)';
+            } else {
+                arrow.textContent = ' ⇅';
+                th.style.color = '';
+            }
+        });
+    }
+
+    function sortTable(col) {
+        if (sortCol === col) {
+            sortAsc = !sortAsc;
+        } else {
+            sortCol = col;
+            sortAsc = true;
+        }
+
+        const tbody = table.querySelector('tbody');
+        const rows = Array.from(tbody.querySelectorAll('tr'));
+        const numCols = new Set(['tier', 'headway', 'demand']);
+
+        rows.sort((a, b) => {
+            let va = a.dataset[col] || '';
+            let vb = b.dataset[col] || '';
+            if (numCols.has(col)) {
+                va = parseFloat(va);
+                vb = parseFloat(vb);
+                return sortAsc ? va - vb : vb - va;
+            }
+            // dep is HH:MM — sort lexicographically (works fine for 24-hr)
+            return sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+        });
+
+        rows.forEach(r => tbody.appendChild(r));
+        updateArrows();
+    }
+
+    table.querySelectorAll('th.od-sortable').forEach(th => {
+        th.addEventListener('click', () => sortTable(th.dataset.col));
+    });
+
+    // Initial render: show current sort arrows
+    updateArrows();
+    // Default sort by Coverage Tier ascending
+    sortTable('tier');
+})();
+</script>
+{% endblock %}

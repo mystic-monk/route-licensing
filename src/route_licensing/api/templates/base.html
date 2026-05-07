@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Route Licensing Decision Support — analysis tool for public transport route licensing">
+    <title>{% block title %}Route Licensing{% endblock %}</title>
+    <link rel="stylesheet" href="/static/styles.css?v={{ cache_bust }}">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚌</text></svg>">
+</head>
+<body>
+    <header class="app-header">
+        <div class="header-inner">
+            <a href="/" class="logo">
+                <div class="logo-icon">🚌</div>
+                <span>Route Licensing</span>
+                <span class="header-badge">v1.0</span>
+            </a>
+            <nav>
+                <ul class="nav-links">
+                    <li><a href="/" class="{% if active_page == 'dashboard' %}active{% endif %}">Dashboard</a></li>
+                    <li><a href="/history" class="{% if active_page == 'history' %}active{% endif %}">History</a></li>
+                    <li><a href="/gtfs-routes" class="{% if active_page == 'gtfs' %}active{% endif %}">GTFS Static Routes</a></li>
+                    <li><a href="/gtfs-stops" class="{% if active_page == 'gtfs_stops' %}active{% endif %}">GTFS Static Stops</a></li>
+                    <li><a href="/docs" target="_blank">API Docs</a></li>
+                </ul>
+            </nav>
+        </div>
+    </header>
+
+    <main class="app-container">
+        {% block content %}{% endblock %}
+    </main>
+
+    <footer class="app-footer">
+        <p>Route Licensing Decision Support &copy; 2026</p>
+        <p style="margin-top: 4px;">Route licensing decision support tool · analysis against GTFS static feed data</p>
+    </footer>
+
+    <script src="/static/app.js?v={{ cache_bust }}"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

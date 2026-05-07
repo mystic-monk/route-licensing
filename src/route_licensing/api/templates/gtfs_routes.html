@@ -1,0 +1,494 @@
+{% extends "base.html" %}
+{% block title %}GTFS Static Routes — Route Licensing{% endblock %}
+
+{% block content %}
+
+<!-- ── Hero ──────────────────────────────────────────────────────────── -->
+<div class="page-hero animate-in">
+    <h1>GTFS Static Feed Routes Browser</h1>
+    <p>
+        Existing services loaded automatically from the
+        <a href="https://www.transportforireland.ie/transitData/Data/GTFS_All.zip"
+           target="_blank" rel="noopener"
+           style="color:var(--accent-teal); text-decoration:none; border-bottom:1px dotted var(--accent-teal);">
+            GTFS Static feed
+        </a>
+        &nbsp;·&nbsp; refreshed every 7 days
+        {% if gtfs_ready %}
+        &nbsp;·&nbsp;
+        <strong>{{ stats.total_routes }}</strong> routes &nbsp;·&nbsp;
+        <strong>{{ stats.total_stops }}</strong> stops &nbsp;·&nbsp;
+        <strong>{{ stats.total_operators }}</strong> operators
+        {% endif %}
+    </p>
+</div>
+
+{% if not gtfs_ready %}
+<!-- ── No feed ──────────────────────────────────────────────────────── -->
+<div class="card empty-state animate-in" style="padding:60px 32px;">
+    <div class="icon">📡</div>
+    <h3>GTFS Static feed not loaded</h3>
+    <p>The GTFS Static feed has not been loaded yet. Check
+       <a href="/api/v1/status">/api/v1/status</a> for details.</p>
+</div>
+
+{% else %}
+
+<!-- ── Summary Stats ─────────────────────────────────────────────────── -->
+<div class="stats-row animate-in" style="margin-bottom:28px;">
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.total_routes }}</div>
+        <div class="stat-label">Routes</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.total_stops }}</div>
+        <div class="stat-label">Unique Stops</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.total_operators }}</div>
+        <div class="stat-label">Operators</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ "{:,}".format(stats.total_departures) }}</div>
+        <div class="stat-label">Scheduled Departures</div>
+    </div>
+</div>
+
+<!-- ── Filter Bar ────────────────────────────────────────────────────── -->
+<form method="get" action="/gtfs-routes" class="animate-in">
+    <div class="filter-bar" style="margin-bottom:20px;">
+        <div class="filter-bar-item">
+            <label class="filter-label" for="f-search">Route</label>
+            <input type="text" id="f-search" name="search" class="filter-input"
+                   placeholder="Route number, name or ID…" value="{{ search }}" autocomplete="off">
+        </div>
+        <div class="filter-bar-item">
+            <label class="filter-label" for="f-operator">Operator</label>
+            <select id="f-operator" name="operator" class="filter-select">
+                <option value="">All operators</option>
+                {% for op in table.operators %}
+                <option value="{{ op }}" {% if op == operator %}selected{% endif %}>{{ op }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="filter-bar-item" style="align-self:flex-end;">
+            <button type="submit" class="upload-btn" style="margin-top:0; padding:7px 20px;">
+                Search
+            </button>
+        </div>
+        {% if search or operator %}
+        <div class="filter-bar-item" style="align-self:flex-end;">
+            <a href="/gtfs-routes" class="filter-reset-btn" style="display:inline-block; padding:6px 14px;">
+                Reset
+            </a>
+        </div>
+        {% endif %}
+        <div class="filter-count-display">
+            {{ table.total }} route(s) found
+        </div>
+    </div>
+</form>
+
+<!-- ── Routes Timetable List ─────────────────────────────────────────── -->
+{% if table.routes %}
+
+<div class="animate-in">
+    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
+        <h2 class="section-title" style="margin:0;">
+            🗂 Routes
+            <span style="font-size:0.75rem; font-weight:400; color:var(--text-muted); margin-left:8px;">
+                Page {{ table.page }} of {{ table.total_pages }}
+                — showing {{ table.routes|length }} of {{ table.total }}
+            </span>
+        </h2>
+        <div style="display:flex; gap:8px;">
+            <span class="tt-legend-item" style="background:rgba(0,155,158,0.08); border-color:rgba(0,155,158,0.2); color:var(--accent-teal);">
+                📅 {{ service_day_label }}
+            </span>
+        </div>
+    </div>
+
+    {% for route in table.routes %}
+    <div style="margin-bottom:24px;">
+
+        <!-- Route header -->
+        <div class="tt-dir-header" style="justify-content:space-between; flex-wrap:wrap; gap:8px;">
+            <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                <span class="route-num-badge">{{ route.route_label }}</span>
+                <div style="display:flex; flex-direction:column; gap:2px;">
+                    <span class="tt-dir-title" style="font-size:0.88rem;">
+                        {% if route.route_long_name and route.route_long_name != route.route_label %}
+                            {{ route.route_long_name }}
+                        {% else %}
+                            {{ route.operator }}
+                        {% endif %}
+                    </span>
+                    <span class="tt-dir-meta" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                        {% if route.route_long_name and route.route_long_name != route.route_label %}
+                            <span style="color:var(--text-secondary);">{{ route.operator }}</span>
+                            <span style="color:var(--border-color);">·</span>
+                        {% endif %}
+                        <span title="Transport mode">{{ route.mode_icon }} {{ route.mode_label }}</span>
+                        <span style="color:var(--border-color);">·</span>
+                        <span title="Stops on this route">{{ route.stop_count }} stops</span>
+                        <span style="color:var(--border-color);">·</span>
+                        <span title="Total trips in this feed">{{ route.trip_count }} trips</span>
+                        <span style="color:var(--border-color);">·</span>
+                        <span title="First and last departure">{{ route.first_dep }}–{{ route.last_dep }}</span>
+                    </span>
+                </div>
+            </div>
+            <button class="expand-btn"
+                    onclick="toggleRoute('rt-{{ loop.index }}')"
+                    title="Show/hide timetable">
+                ▸ Timetable
+            </button>
+        </div>
+
+        <!-- Timetable (hidden by default, revealed on expand) -->
+        <div id="rt-{{ loop.index }}" style="display:none;">
+            <div class="card" style="padding:0; overflow:hidden;">
+                <div class="tt-wrap">
+                    <table class="tt-table">
+                        <thead>
+                            <tr>
+                                <th class="tt-head-fixed tt-col-name">Stop Name</th>
+                                <th class="tt-head-fixed tt-col-id">Stop ID</th>
+                                {% if route.col_times %}
+                                <th class="tt-head-days" colspan="{{ route.col_times|length }}">
+                                    All departures · {{ service_day_label }} · sorted by time
+                                </th>
+                                {% endif %}
+                            </tr>
+                            <tr>
+                                {% for t in route.col_times %}
+                                <th class="tt-head-time">
+                                    <div class="tt-time-label">{{ t[:5] if t|length >= 5 else t }}</div>
+                                </th>
+                                {% endfor %}
+                            </tr>
+                        </thead>
+                        <tbody>
+                        {% for stop in route.stops %}
+                        <tr class="tt-row{% if loop.index is odd %} tt-row-odd{% endif %}">
+                            <td class="tt-cell-fixed tt-col-name">
+                                <strong>{{ stop.stop_name }}</strong>
+                            </td>
+                            <td class="tt-cell-fixed tt-col-id" style="left:160px;">
+                                {{ stop.stop_id }}
+                            </td>
+                            {% for t in stop.times %}
+                            {% if t %}
+                                <td class="tt-cell tt-cell-gtfs">
+                                    <span class="tt-time-val">
+                                        {{ t[:5] if t|length >= 5 else t }}
+                                    </span>
+                                </td>
+                            {% else %}
+                                <td class="tt-cell tt-cell-none">
+                                    <span class="tt-empty-dash">·</span>
+                                </td>
+                            {% endif %}
+                            {% endfor %}
+                        </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+    </div>
+    {% endfor %}
+</div>
+
+<!-- ── Pagination ─────────────────────────────────────────────────────── -->
+{% if table.total_pages > 1 %}
+<div class="pagination-row animate-in">
+    {% if table.page > 1 %}
+    <a href="/gtfs-routes?page={{ table.page - 1 }}&search={{ search }}&operator={{ operator }}"
+       class="page-btn">← Prev</a>
+    {% else %}
+    <span class="page-btn page-btn-disabled">← Prev</span>
+    {% endif %}
+
+    {% for p in range(1, table.total_pages + 1) %}
+        {% if p == table.page %}
+        <span class="page-btn page-btn-active">{{ p }}</span>
+        {% elif p <= 3 or p >= table.total_pages - 2 or (p >= table.page - 2 and p <= table.page + 2) %}
+        <a href="/gtfs-routes?page={{ p }}&search={{ search }}&operator={{ operator }}"
+           class="page-btn">{{ p }}</a>
+        {% elif p == 4 or p == table.total_pages - 3 %}
+        <span class="page-btn page-btn-disabled">…</span>
+        {% endif %}
+    {% endfor %}
+
+    {% if table.page < table.total_pages %}
+    <a href="/gtfs-routes?page={{ table.page + 1 }}&search={{ search }}&operator={{ operator }}"
+       class="page-btn">Next →</a>
+    {% else %}
+    <span class="page-btn page-btn-disabled">Next →</span>
+    {% endif %}
+</div>
+{% endif %}
+
+{% else %}
+<div class="card empty-state animate-in" style="padding:48px 32px;">
+    <div class="icon">🔍</div>
+    <h3>No routes found</h3>
+    <p>Try adjusting the search or operator filter.</p>
+</div>
+{% endif %}
+
+{% endif %}{# /gtfs_ready #}
+
+{% endblock %}
+
+
+{% block scripts %}
+<style>
+/* ── Route number badge ──────────────────────────────────────────────── */
+.route-num-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    padding: 3px 10px;
+    background: var(--accent-teal);
+    color: #000;
+    font-size: 0.78rem;
+    font-weight: 800;
+    border-radius: var(--radius-sm);
+    font-family: monospace;
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+}
+
+/* ── Direction header (reuse from timetable.html) ───────────────────── */
+.tt-dir-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+.tt-dir-title  { font-size:0.92rem; font-weight:700; color:var(--text-primary); }
+.tt-dir-meta   { font-size:0.72rem; color:var(--text-muted); }
+
+/* ── Timetable wide table ─────────────────────────────────────────────── */
+.tt-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+}
+.tt-table {
+    border-collapse: collapse;
+    font-size: 0.78rem;
+    white-space: nowrap;
+    min-width: 100%;
+}
+
+/* Fixed sticky columns */
+.tt-col-name { left: 0;    min-width: 180px; max-width: 240px; white-space: normal; }
+.tt-col-id   { left: 180px; min-width: 88px; }
+
+.tt-head-fixed {
+    position: sticky;
+    background: var(--bg-secondary);
+    z-index: 3;
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 10px 12px;
+    border-bottom: 2px solid var(--border-color);
+    border-right: 1px solid var(--border-color);
+    vertical-align: middle;
+    text-align: left;
+}
+.tt-head-days {
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-align: center;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-color);
+    border-left: 2px solid var(--accent-teal);
+    letter-spacing: 0.03em;
+}
+.tt-head-time {
+    min-width: 52px;
+    max-width: 52px;
+    padding: 0;
+    vertical-align: bottom;
+    background: var(--bg-secondary);
+    border-bottom: 2px solid var(--border-color);
+    text-align: center;
+    border-left: 1px solid rgba(0,155,158,0.1);
+}
+.tt-time-label {
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    padding: 8px 4px;
+    font-size: 0.67rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+    letter-spacing: 0.03em;
+}
+
+/* Data rows */
+.tt-cell-fixed {
+    position: sticky;
+    background: var(--bg-card);
+    z-index: 1;
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--border-color);
+    border-right: 1px solid var(--border-color);
+    color: var(--text-primary);
+    vertical-align: middle;
+}
+.tt-col-id.tt-cell-fixed {
+    font-family: monospace;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+}
+.tt-row-odd .tt-cell-fixed { background: var(--bg-card-hover); }
+
+.tt-cell {
+    padding: 6px 3px;
+    text-align: center;
+    border-bottom: 1px solid var(--border-color);
+    border-left: 1px solid rgba(0,155,158,0.06);
+    min-width: 52px;
+}
+/* GTFS times use teal accent */
+.tt-cell-gtfs { background: rgba(0,155,158,0.06); }
+.tt-cell-none  { background: transparent; }
+
+.tt-time-val {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    font-family: monospace;
+    display: block;
+}
+.tt-cell-gtfs .tt-time-val { color: var(--accent-teal); }
+.tt-empty-dash { color: var(--border-color); font-size: 0.7rem; }
+
+/* ── Legend pill ─────────────────────────────────────────────────────── */
+.tt-legend-item {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 0.72rem; padding: 3px 10px; border-radius: 100px;
+    border: 1px solid var(--border-color); color: var(--text-secondary);
+}
+
+/* ── Filter bar (reuse from results.html) ────────────────────────────── */
+.filter-bar {
+    display: flex; align-items: flex-end; flex-wrap: wrap;
+    gap: 12px; margin-bottom: 14px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 14px 16px;
+}
+.filter-bar-item { display:flex; flex-direction:column; gap:4px; }
+.filter-label {
+    font-size:0.65rem; text-transform:uppercase;
+    letter-spacing:0.07em; color:var(--text-muted);
+}
+.filter-input, .filter-select {
+    background: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 0.8rem;
+    padding: 6px 10px;
+    outline: none;
+    min-width: 160px;
+}
+.filter-input:focus, .filter-select:focus { border-color: var(--accent-teal); }
+.filter-reset-btn {
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    padding: 6px 14px;
+    cursor: pointer;
+    transition: all 0.15s;
+    text-decoration: none;
+}
+.filter-reset-btn:hover { border-color:var(--accent-teal); color:var(--accent-teal); }
+.filter-count-display {
+    margin-left: auto; font-size: 0.75rem;
+    color: var(--text-muted); align-self: flex-end; padding-bottom: 6px;
+}
+
+/* ── Expand button ───────────────────────────────────────────────────── */
+.expand-btn {
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    padding: 4px 12px;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.expand-btn:hover, .expand-btn.open {
+    border-color: var(--accent-teal); color: var(--accent-teal);
+}
+
+/* ── Pagination ──────────────────────────────────────────────────────── */
+.pagination-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin: 32px 0;
+}
+.page-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 36px; height: 36px;
+    padding: 0 10px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    font-weight: 500;
+    text-decoration: none;
+    transition: all 0.15s;
+}
+.page-btn:hover { border-color: var(--accent-teal); color: var(--accent-teal); }
+.page-btn-active {
+    background: var(--accent-teal);
+    border-color: var(--accent-teal);
+    color: #000;
+    font-weight: 700;
+    pointer-events: none;
+}
+.page-btn-disabled {
+    opacity: 0.35;
+    pointer-events: none;
+}
+</style>
+
+<script>
+function toggleRoute(id) {
+    const el  = document.getElementById(id);
+    if (!el) return;
+    const open = el.style.display !== 'none';
+    el.style.display = open ? 'none' : 'block';
+    // find the button in the sibling header
+    const header = el.previousElementSibling;
+    if (header) {
+        const btn = header.querySelector('.expand-btn');
+        if (btn) btn.classList.toggle('open', !open);
+    }
+}
+</script>
+{% endblock %}

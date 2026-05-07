@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Analysis History — Route Licensing{% endblock %}
+
+{% block content %}
+<div class="page-hero animate-in">
+    <h1>Analysis History</h1>
+    <p>All stored route licensing analyses</p>
+</div>
+
+<div class="section animate-in">
+    {% if history|length > 0 %}
+    <div class="card" style="padding: 0;">
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Route ID</th>
+                        <th>Operator</th>
+                        <th>Verdict</th>
+                        <th>Stops</th>
+                        <th>🟢 Green</th>
+                        <th>🟡 Amber</th>
+                        <th>🔴 Red</th>
+                        <th>Recommendation</th>
+                        <th>Date</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for item in history %}
+                <tr>
+                    <td><strong>{{ item.ref_id }}</strong></td>
+                    <td>{{ item.operator }}</td>
+                    <td>
+                        {% if item.verdict == 'APPROVE' %}
+                            <span class="badge badge-green">🟢 Low overlap</span>
+                        {% elif item.verdict == 'REJECT' %}
+                            <span class="badge badge-red">🔴 High overlap</span>
+                        {% else %}
+                            <span class="badge badge-amber">🟡 Moderate overlap</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ item.total_stops }}</td>
+                    <td>{{ item.green_stops }}</td>
+                    <td>{{ item.amber_stops }}</td>
+                    <td>{{ item.red_stops }}</td>
+                    <td style="font-size:0.8rem; color: var(--text-secondary); max-width:300px;">{{ item.recommendation }}</td>
+                    <td style="color: var(--text-muted); font-size:0.8rem; white-space:nowrap;">{{ item.timestamp }}</td>
+                    <td><a href="/results/{{ item.ref_id }}" class="badge badge-blue">View →</a></td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% else %}
+    <div class="card empty-state">
+        <div class="icon">📊</div>
+        <h3>No analyses yet</h3>
+        <p>Upload a timetable to run your first route analysis</p>
+        <a href="/" style="margin-top:16px; display:inline-block;" class="upload-btn">Go to Dashboard</a>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

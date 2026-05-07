@@ -1,0 +1,537 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Route Licensing{% endblock %}
+
+{% block content %}
+<div class="page-hero animate-in">
+    <h1>Route Licensing Dashboard</h1>
+    <p>Upload a proposed bus timetable to analyse against existing GTFS Static feed services across Ireland</p>
+    <div style="margin-top:10px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; font-size:0.78rem;">
+        {% if gtfs_ready %}
+            <span style="display:inline-flex; align-items:center; gap:5px;
+                          background:rgba(0,137,123,0.15); border:1px solid rgba(0,137,123,0.3);
+                          border-radius:100px; padding:3px 10px; color:var(--accent-teal);">
+                <span style="width:6px;height:6px;border-radius:50%;background:var(--accent-teal);flex-shrink:0;"></span>
+                GTFS Static Feed Ready
+                &nbsp;·&nbsp; {{ stats.gtfs_routes }} routes
+                &nbsp;·&nbsp; {{ stats.gtfs_stops }} stop-service records
+                {% if gtfs_refreshed %}&nbsp;·&nbsp; Last fetched: <strong style="color:#fff; background:rgba(0,137,123,0.4); padding:1px 7px; border-radius:4px;">{{ gtfs_refreshed }}</strong>{% endif %}
+                &nbsp;·&nbsp;
+                <button id="gtfs-refresh-btn" onclick="refreshGtfs()"
+                        style="background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.25);
+                               border-radius:4px; color:#fff; font-size:0.72rem; padding:1px 8px;
+                               cursor:pointer; line-height:1.6;">
+                    ↻ Refresh
+                </button>
+            </span>
+        {% else %}
+            <span style="display:inline-flex; align-items:center; gap:5px;
+                          background:rgba(239,68,68,0.12); border:1px solid rgba(239,68,68,0.25);
+                          border-radius:100px; padding:3px 10px; color:var(--verdict-red);">
+                <span style="width:6px;height:6px;border-radius:50%;background:var(--verdict-red);flex-shrink:0;"></span>
+                GTFS Static feed not loaded — analysis unavailable
+            </span>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Upload Section -->
+<div class="section animate-in">
+    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:14px;">
+        <h2 class="section-title" style="margin:0;">📄 New Analysis</h2>
+        <a href="/download/timetable-template" class="template-dl-btn" download>
+            ⬇ Download Excel Template
+        </a>
+    </div>
+
+    <!-- Template format hint -->
+    <div class="template-hint">
+        <div class="template-hint-icon">📋</div>
+        <div class="template-hint-body">
+            <strong>Expected format:</strong>
+            One sheet per route direction. Each sheet has a <em>section title</em> row, a <em>header</em> row
+            (Stop Name | Stop Location | Stop ID | departure times…), then one stop per row.
+            Stop IDs must be valid GTFS Static feed stop codes.
+            <a href="/download/timetable-template" download style="color:var(--accent-teal); font-weight:600; white-space:nowrap;">
+                Download the template →
+            </a>
+        </div>
+    </div>
+
+    <form id="upload-form" action="/api/v1/analyze" method="post" enctype="multipart/form-data">
+
+        <!-- Unified upload card: operator + file drop together -->
+        <div class="card" style="padding:0; overflow:hidden; margin-bottom:14px;">
+
+            <!-- Operator row — sits flush at the top of the card -->
+            <div style="display:flex; align-items:center; gap:14px; padding:14px 20px;
+                        border-bottom:1px solid var(--border-color); background:var(--bg-secondary);">
+                <label for="operator-input"
+                       style="font-size:0.82rem; font-weight:600; color:var(--text-secondary);
+                              white-space:nowrap; flex-shrink:0;">
+                    Proposing Operator <span style="color:var(--verdict-red);">*</span>
+                </label>
+                <input type="text" id="operator-input" name="operator"
+                       class="upload-meta-input"
+                       style="flex:1; max-width:340px;"
+                       placeholder="e.g. Bus Éireann"
+                       autocomplete="organization" required>
+                <span style="font-size:0.75rem; color:var(--text-muted);">
+                    The operating company submitting this proposal ·
+                    <a href="/gtfs-stops" target="_blank" style="color:var(--accent-teal);">browse available stop codes →</a>
+                </span>
+            </div>
+
+            <!-- File drop zone — directly below the operator row, no gap -->
+            <div class="upload-zone" id="upload-zone"
+                 style="border:none; border-radius:0; margin:0; padding:36px 24px;">
+                <div class="upload-icon">📄</div>
+                <h3>Drop your Excel timetable here</h3>
+                <p>Accepts .xlsx or .xls — use the template above to ensure the correct format</p>
+                <button type="button" class="upload-btn">Browse Files</button>
+                <input type="file" name="file" id="file-input" class="file-input" accept=".xlsx,.xls">
+
+                <div class="upload-progress" id="upload-progress">
+                    <div class="progress-bar-track">
+                        <div class="progress-bar-fill"></div>
+                    </div>
+                    <div class="progress-text">Preparing analysis...</div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Advanced thresholds (collapsible) — below the card, not between operator and file -->
+        <details style="margin-bottom:4px; background:var(--bg-secondary); border:1px solid var(--border-color); border-radius:8px; padding:0;">
+            <summary style="padding:10px 14px; cursor:pointer; font-size:0.8rem; font-weight:600;
+                             color:var(--text-secondary); list-style:none; display:flex; align-items:center; gap:6px;">
+                ⚙ Analysis settings
+                <span style="font-weight:400; color:var(--text-muted); margin-left:4px;">
+                    · Walk radius: <span id="summary-walk">400</span>m
+                    · High overlap at: <span id="summary-reject">80</span>%
+                    · Moderate overlap at: <span id="summary-changes">60</span>%
+                </span>
+            </summary>
+            <div style="padding:14px 16px 18px; border-top:1px solid var(--border-color); display:flex; flex-direction:column; gap:18px;">
+
+                <!-- Group 1: Journey coverage thresholds — drive the verdict -->
+                <div>
+                    <div style="font-size:0.72rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em;
+                                color:var(--accent-teal); margin-bottom:4px;">
+                        Journey coverage — determines the verdict
+                    </div>
+                    <div style="font-size:0.72rem; color:var(--text-muted); margin-bottom:12px;">
+                        Every stop pair A→B on the proposed route is checked against the existing network in three tiers.
+                        The analysis stops at the first tier that gives a result — stronger coverage tiers carry more weight.
+                    </div>
+
+                    <!-- Tier decision cascade -->
+                    <div style="display:flex; flex-direction:column; gap:8px; margin-bottom:14px;">
+
+                        <!-- Tier 1 row -->
+                        <div style="display:flex; align-items:flex-start; gap:10px; background:rgba(239,68,68,0.05);
+                                    border:1px solid rgba(239,68,68,0.2); border-radius:6px; padding:10px 12px;">
+                            <span style="background:var(--verdict-red); color:#fff; border-radius:4px;
+                                         padding:1px 8px; font-size:0.68rem; font-weight:700; white-space:nowrap; flex-shrink:0; margin-top:1px;">
+                                Tier 1 — Direct
+                            </span>
+                            <div style="flex:1; font-size:0.74rem; color:var(--text-muted);">
+                                An existing bus already makes the same journey at the same time of day.
+                                A direct service is the strongest duplication signal — indicates High overlap or Moderate overlap depending on coverage level.
+                            </div>
+                            <div style="display:flex; flex-direction:column; gap:6px; flex-shrink:0; min-width:160px;">
+                                <div class="upload-meta-field" style="margin:0;">
+                                    <label class="upload-meta-label" style="white-space:nowrap;">→ High overlap if Tier 1 ≥</label>
+                                    <input type="number" name="od_reject_ratio" value="0.80" min="0.1" max="1.0" step="0.05"
+                                           class="upload-meta-input" style="width:80px;"
+                                           oninput="document.getElementById('summary-reject').textContent=Math.round(this.value*100)">
+                                    <span class="upload-meta-hint">Fraction of A→B pairs directly served. Default 80%.</span>
+                                </div>
+                                <div class="upload-meta-field" style="margin:0;">
+                                    <label class="upload-meta-label" style="white-space:nowrap;">→ Moderate overlap if Tier 1 ≥</label>
+                                    <input type="number" name="od_changes_ratio" id="od-changes-ratio-input" value="0.60" min="0.1" max="1.0" step="0.05"
+                                           class="upload-meta-input" style="width:80px;"
+                                           oninput="updateChangesThreshold(this.value)">
+                                    <span class="upload-meta-hint">Fraction of A→B pairs directly served. Default 60%. Also used as the Moderate overlap threshold for Tiers 2 and 3.</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Tier 2 row -->
+                        <div style="display:flex; align-items:flex-start; gap:10px; background:rgba(251,191,36,0.05);
+                                    border:1px solid rgba(251,191,36,0.25); border-radius:6px; padding:10px 12px;">
+                            <span style="background:var(--verdict-amber); color:#000; border-radius:4px;
+                                         padding:1px 8px; font-size:0.68rem; font-weight:700; white-space:nowrap; flex-shrink:0; margin-top:1px;">
+                                Tier 2 — Interchange
+                            </span>
+                            <div style="flex:1; font-size:0.74rem; color:var(--text-muted);">
+                                No direct service, but the passenger could board an existing bus at A, transfer at an
+                                intermediate stop, and reach B on a second existing service within a 5 to 45 minute connection window.
+                                An interchange is a real but less convenient alternative — indicates Moderate overlap only, not High overlap.
+                            </div>
+                            <div style="display:flex; flex-direction:column; gap:6px; flex-shrink:0; min-width:160px;">
+                                <div style="font-size:0.74rem; color:var(--text-secondary);">
+                                    → Moderate overlap if Tier 2 ≥
+                                    <strong style="color:var(--accent-teal);" class="tier-shared-val">60</strong>%
+                                    <div style="font-size:0.7rem; color:var(--text-muted); margin-top:3px;">
+                                        Mirrors the Tier 1 Moderate threshold above. Tier 2 cannot trigger High overlap.
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Tier 3 row -->
+                        <div style="display:flex; align-items:flex-start; gap:10px; background:rgba(100,116,139,0.05);
+                                    border:1px solid rgba(100,116,139,0.2); border-radius:6px; padding:10px 12px;">
+                            <span style="background:rgba(100,116,139,0.5); color:#fff; border-radius:4px;
+                                         padding:1px 8px; font-size:0.68rem; font-weight:700; white-space:nowrap; flex-shrink:0; margin-top:1px;">
+                                Tier 3 — Walk access
+                            </span>
+                            <div style="flex:1; font-size:0.74rem; color:var(--text-muted);">
+                                No direct or interchange service, but the passenger could walk to a nearby stop and catch
+                                an existing bus to their destination. The weakest coverage signal — Moderate overlap only.
+                            </div>
+                            <div style="display:flex; flex-direction:column; gap:6px; flex-shrink:0; min-width:160px;">
+                                <div style="font-size:0.74rem; color:var(--text-secondary); margin-bottom:6px;">
+                                    → Moderate overlap if Tier 3 ≥
+                                    <strong style="color:var(--accent-teal);" class="tier-shared-val">60</strong>%
+                                    <div style="font-size:0.7rem; color:var(--text-muted); margin-top:3px;">
+                                        Mirrors the Tier 1 Moderate threshold above. Walk access cannot trigger High overlap.
+                                    </div>
+                                </div>
+                                <div class="upload-meta-field" style="margin:0;">
+                                    <label class="upload-meta-label" style="white-space:nowrap;">Walk radius (metres)</label>
+                                    <input type="number" name="od_walk_radius_metres" value="400" min="50" max="1500" step="50"
+                                           class="upload-meta-input" style="width:80px;"
+                                           oninput="document.getElementById('summary-walk').textContent=this.value">
+                                    <span class="upload-meta-hint">City centre: 200–300 m · Suburban: 400 m · Rural: 600–900 m</span>
+                                </div>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+
+                <!-- Group 3: Demand data thresholds — only active when a demand file is uploaded -->
+                <div style="border:1px dashed var(--border-color); border-radius:6px; padding:12px;">
+                    <div style="font-size:0.72rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em;
+                                color:var(--text-secondary); margin-bottom:4px;">
+                        Demand signal — only applies if a passenger demand file is uploaded
+                    </div>
+                    <div style="font-size:0.72rem; color:var(--text-muted); margin-bottom:10px;">
+                        <strong>Without a demand file these thresholds have no effect on the overlap assessment.</strong>
+                        When demand data is present: high demand on an infrequent existing service (capacity gap)
+                        softens High overlap to Moderate; low demand on overlapping corridors can elevate Low to Moderate overlap.
+                    </div>
+                    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px;">
+                        <div class="upload-meta-field">
+                            <label class="upload-meta-label">High demand threshold (pax/hr ≥)</label>
+                            <input type="number" name="od_high_pax_threshold" value="10" min="1" max="500" step="1" class="upload-meta-input">
+                            <span class="upload-meta-hint">Passengers per hour at or above which existing demand is considered high — triggers capacity gap softening.</span>
+                        </div>
+                        <div class="upload-meta-field">
+                            <label class="upload-meta-label">Low demand threshold (pax/hr &lt;)</label>
+                            <input type="number" name="od_low_pax_threshold" value="2" min="0" max="50" step="1" class="upload-meta-input">
+                            <span class="upload-meta-hint">Passengers per hour below which demand is too low to justify a new competing service.</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Group 4: Stop-level evidence display — no effect on verdict -->
+                <div style="opacity:0.75;">
+                    <div style="font-size:0.72rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em;
+                                color:var(--text-muted); margin-bottom:4px;">
+                        Stop-level evidence display — does not affect the verdict
+                    </div>
+                    <div style="font-size:0.72rem; color:var(--text-muted); margin-bottom:10px;">
+                        These control the risk scores shown in the stop detail tables — supporting evidence only.
+                        Changing them does not affect the journey overlap assessment.<br>
+                        <strong>Corridor radius</strong> in particular sounds significant but only affects which stops are
+                        highlighted as geographically near an existing route — it has no bearing on whether a journey is already covered.
+                    </div>
+                    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px;">
+                        <div class="upload-meta-field">
+                            <label class="upload-meta-label">Timing window (±minutes)</label>
+                            <input type="number" name="timing_window_minutes" value="10" min="1" max="60" class="upload-meta-input">
+                            <span class="upload-meta-hint">A stop is flagged if an existing service departs within this window. Adds +2 to the stop risk score display.</span>
+                        </div>
+                        <div class="upload-meta-field">
+                            <label class="upload-meta-label">Corridor radius (metres)</label>
+                            <input type="number" name="corridor_radius_metres" value="300" min="50" max="1000" class="upload-meta-input">
+                            <span class="upload-meta-hint">A stop is highlighted as in-corridor if an existing stop lies within this distance. Adds +1 to the stop risk score display only.</span>
+                        </div>
+                        <div class="upload-meta-field">
+                            <label class="upload-meta-label">Well-served headway (≤ minutes)</label>
+                            <input type="number" name="min_headway_minutes" value="20" min="5" max="120" class="upload-meta-input">
+                            <span class="upload-meta-hint">Existing service more frequent than this is considered well served (+2 to stop risk score display). Also used in the demand capacity gap test if demand data is uploaded.</span>
+                        </div>
+                        <div class="upload-meta-field">
+                            <label class="upload-meta-label">Moderate headway (≤ minutes)</label>
+                            <input type="number" name="amber_headway_minutes" value="40" min="5" max="180" class="upload-meta-input">
+                            <span class="upload-meta-hint">Existing service more frequent than this is considered moderate (+1 to stop risk score display). Also gates the demand capacity gap test if demand data is uploaded.</span>
+                        </div>
+                        <div class="upload-meta-field">
+                            <label class="upload-meta-label">Stop RED threshold (risk ≥)</label>
+                            <input type="number" name="stop_red_threshold" value="4" min="1" max="5" class="upload-meta-input">
+                            <span class="upload-meta-hint">Stop risk score at or above which the stop is shown 🔴 in the evidence table.</span>
+                        </div>
+                        <div class="upload-meta-field">
+                            <label class="upload-meta-label">Stop AMBER threshold (risk ≥)</label>
+                            <input type="number" name="stop_amber_threshold" value="2" min="1" max="5" class="upload-meta-input">
+                            <span class="upload-meta-hint">Stop risk score at or above which the stop is shown 🟡 in the evidence table.</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Group 5: Fallback thresholds — only fire if OD data is unavailable -->
+                <div style="opacity:0.65;">
+                    <div style="font-size:0.72rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em;
+                                color:var(--text-muted); margin-bottom:4px;">
+                        Fallback only — used if journey check cannot run
+                    </div>
+                    <div style="font-size:0.72rem; color:var(--text-muted); margin-bottom:10px;">
+                        Applied only when all stop IDs are unrecognised and the A→B journey check cannot run at all.
+                        Under normal conditions these have no effect on the overlap assessment.
+                    </div>
+                    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px;">
+                        <div class="upload-meta-field">
+                            <label class="upload-meta-label">Fallback high overlap ratio</label>
+                            <input type="number" name="route_reject_ratio" value="0.50" min="0.1" max="1.0" step="0.05" class="upload-meta-input">
+                            <span class="upload-meta-hint">Fallback only: flag as high overlap if ≥ this fraction of trips are RED scored.</span>
+                        </div>
+                        <div class="upload-meta-field">
+                            <label class="upload-meta-label">Fallback moderate overlap ratio</label>
+                            <input type="number" name="route_changes_ratio" value="0.40" min="0.1" max="1.0" step="0.05" class="upload-meta-input">
+                            <span class="upload-meta-hint">Fallback only: flag as moderate overlap if ≥ this fraction of trips are RED or AMBER scored.</span>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </details>
+
+    </form>
+</div>
+
+<!-- Demand Data Upload -->
+<div class="section animate-in">
+    <details {% if demand_loaded %}open{% endif %}>
+        <summary style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap;
+                         gap:12px; cursor:pointer; list-style:none; padding:4px 0;">
+            <span style="display:flex; align-items:center; gap:10px;">
+                <h2 class="section-title" style="margin:0;">📊 Passenger Demand Data</h2>
+                {% if demand_loaded %}
+                <span class="badge badge-green" style="font-size:0.72rem;">✓ Loaded</span>
+                {% else %}
+                <span style="font-size:0.78rem; color:var(--text-muted);">(optional)</span>
+                {% endif %}
+            </span>
+            <a href="/download/demand-template" class="template-dl-btn" download
+               onclick="event.stopPropagation()">
+                ⬇ Download Demand Template
+            </a>
+        </summary>
+
+        <div style="margin-top:14px;">
+            {% if demand_loaded %}
+            <div style="display:flex; align-items:center; gap:10px; background:rgba(0,137,123,0.07);
+                        border:1px solid rgba(0,137,123,0.25); border-radius:8px; padding:10px 16px; margin-bottom:14px; font-size:0.82rem;">
+                <span style="color:var(--accent-teal); font-size:1.1rem;">✅</span>
+                <div>
+                    <strong style="color:var(--accent-teal);">Demand data loaded</strong>
+                    {% if demand_meta.source_file %}— from <em>{{ demand_meta.source_file }}</em>{% endif %}
+                    {% if demand_meta.record_count %}({{ demand_meta.record_count }} records){% endif %}
+                    {% if demand_meta.loaded_at %}<span style="color:var(--text-muted); font-size:0.72rem;"> · cached {{ demand_meta.loaded_at[:10] }}</span>{% endif %}
+                </div>
+            </div>
+            {% endif %}
+
+            <div class="template-hint">
+                <div class="template-hint-icon">📋</div>
+                <div class="template-hint-body">
+                    Upload an OD demand Excel file to enrich route analyses with passenger demand context.
+                    Partial data is supported — pairs without estimates show "No data" in the analysis.
+                    Use the template above to get the correct column format.
+                </div>
+            </div>
+
+            <form id="demand-form" enctype="multipart/form-data">
+                <div class="upload-zone" id="demand-zone" style="margin-top:12px;">
+                    <div class="upload-icon">📊</div>
+                    <h3>Drop demand Excel file here</h3>
+                    <p>Accepts .xlsx — requires columns: stop_id_from, stop_id_to, day_type, time_band, pax_per_hour</p>
+                    <button type="button" class="upload-btn" onclick="document.getElementById('demand-file-input').click()">Browse Files</button>
+                    <input type="file" id="demand-file-input" class="file-input" accept=".xlsx,.xls">
+                    <div id="demand-status" style="margin-top:10px; font-size:0.8rem; color:var(--text-muted);"></div>
+                </div>
+            </form>
+        </div>
+    </details>
+</div>
+
+
+<!-- Stats Row -->
+<div class="stats-row animate-in">
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.total }}</div>
+        <div class="stat-label">Total Analyses</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" style="color: var(--verdict-green);">{{ stats.approved }}</div>
+        <div class="stat-label">Low overlap</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" style="color: var(--verdict-amber);">{{ stats.changes }}</div>
+        <div class="stat-label">Moderate overlap</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value" style="color: var(--verdict-red);">{{ stats.rejected }}</div>
+        <div class="stat-label">High overlap</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-value">{{ stats.gtfs_routes }}</div>
+        <div class="stat-label">GTFS Static Routes Loaded</div>
+    </div>
+</div>
+
+<!-- Recent History -->
+<div class="section animate-in">
+    <h2 class="section-title">🕐 Recent Analyses</h2>
+
+    {% if history|length > 0 %}
+    <div class="card" style="padding: 0;">
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Route ID</th>
+                        <th>Operator</th>
+                        <th>Overlap Level</th>
+                        <th>Assessment Note</th>
+                        <th>Stops</th>
+                        <th>🟢</th>
+                        <th>🟡</th>
+                        <th>🔴</th>
+                        <th>Date</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in history %}
+                    <tr>
+                        <td><strong>{{ item.ref_id }}</strong></td>
+                        <td>{{ item.operator }}</td>
+                        <td>
+                            {% if item.verdict == 'APPROVE' %}
+                                <span class="badge badge-green">🟢 Low overlap</span>
+                            {% elif item.verdict == 'REJECT' %}
+                                <span class="badge badge-red">🔴 High overlap</span>
+                            {% else %}
+                                <span class="badge badge-amber">🟡 Moderate overlap</span>
+                            {% endif %}
+                        </td>
+                        <td style="font-size:0.78rem; color:var(--text-muted); max-width:260px;">
+                            {{ item.recommendation | truncate(80) if item.recommendation else '—' }}
+                        </td>
+                        <td>{{ item.total_stops }}</td>
+                        <td>{{ item.green_stops }}</td>
+                        <td>{{ item.amber_stops }}</td>
+                        <td>{{ item.red_stops }}</td>
+                        <td style="color: var(--text-muted); font-size: 0.8rem;">{{ item.timestamp }}</td>
+                        <td><a href="/results/{{ item.ref_id }}" class="badge badge-blue">View →</a></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% else %}
+    <div class="card empty-state">
+        <div class="icon">📊</div>
+        <h3>No analyses yet</h3>
+        <p>Upload a timetable above to run your first route licensing analysis</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function updateChangesThreshold(val) {
+    const pct = Math.round(parseFloat(val) * 100);
+    document.getElementById('summary-changes').textContent = pct;
+    document.querySelectorAll('.tier-shared-val').forEach(el => el.textContent = pct);
+}
+
+function refreshGtfs() {
+    const btn = document.getElementById('gtfs-refresh-btn');
+    btn.disabled = true;
+    btn.textContent = '↻ Fetching…';
+    fetch('/api/v1/refresh-gtfs', { method: 'POST' })
+        .then(r => r.json().then(j => ({ ok: r.ok, body: j })))
+        .then(({ ok, body }) => {
+            if (ok) {
+                btn.textContent = '✓ Done — reloading…';
+                setTimeout(() => location.reload(), 1200);
+            } else {
+                btn.textContent = '✕ Failed';
+                btn.style.color = 'var(--verdict-red)';
+                btn.disabled = false;
+                if (typeof showToast === 'function') {
+                    showToast('GTFS refresh failed: ' + (body.detail || 'see server logs'), 'error');
+                }
+            }
+        })
+        .catch(err => {
+            btn.textContent = '✕ Error';
+            btn.disabled = false;
+            if (typeof showToast === 'function') {
+                showToast('Network error: ' + err.message, 'error');
+            }
+        });
+}
+
+(function () {
+    const input  = document.getElementById('demand-file-input');
+    const zone   = document.getElementById('demand-zone');
+    const status = document.getElementById('demand-status');
+
+    if (!input) return;
+
+    input.addEventListener('change', () => {
+        if (input.files.length > 0) uploadDemand(input.files[0]);
+    });
+
+    zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+    zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+    zone.addEventListener('drop', e => {
+        e.preventDefault();
+        zone.classList.remove('drag-over');
+        const file = e.dataTransfer.files[0];
+        if (file) uploadDemand(file);
+    });
+
+    function uploadDemand(file) {
+        status.textContent = 'Uploading…';
+        status.style.color = 'var(--accent-teal)';
+        const fd = new FormData();
+        fd.append('file', file);
+        fetch('/upload-demand', { method: 'POST', body: fd })
+            .then(r => r.json().then(j => ({ ok: r.ok, body: j })))
+            .then(({ ok, body }) => {
+                if (ok) {
+                    status.innerHTML = `✅ <strong>${body.records_loaded} records loaded</strong> from ${body.source_file}. Refreshing…`;
+                    status.style.color = 'var(--accent-teal)';
+                    setTimeout(() => location.reload(), 1200);
+                } else {
+                    status.textContent = '❌ ' + (body.detail || 'Upload failed.');
+                    status.style.color = 'var(--verdict-red)';
+                }
+            })
+            .catch(err => {
+                status.textContent = '❌ Network error: ' + err.message;
+                status.style.color = 'var(--verdict-red)';
+            });
+    }
+})();
+</script>
+{% endblock %}

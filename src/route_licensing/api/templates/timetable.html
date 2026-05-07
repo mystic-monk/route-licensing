@@ -1,0 +1,580 @@
+{% extends "base.html" %}
+{% block title %}Timetable — {{ result.route_id }} — Route Licensing{% endblock %}
+
+{% block content %}
+
+<div class="page-hero animate-in">
+    <a href="/results/{{ result.route_id }}" class="back-link">← Back to Analysis Results</a>
+    <h1>Submitted Timetable: {{ result.route_id }}</h1>
+    <p>
+        Operator: <strong>{{ result.operator }}</strong>
+        &nbsp;·&nbsp;
+        {{ result.total_stops }} departure(s) evaluated
+    </p>
+</div>
+
+<!-- Overlap summary ribbon -->
+<div class="animate-in" style="margin-bottom: 24px;">
+    {% if result.route_verdict == 'APPROVE' %}
+        {% set r_bg = 'rgba(34,197,94,0.08)' %}
+        {% set r_border = 'var(--verdict-green)' %}
+        {% set r_dot = 'var(--verdict-green)' %}
+        {% set r_label = 'Low overlap' %}
+    {% elif result.route_verdict == 'REJECT' %}
+        {% set r_bg = 'rgba(192,32,42,0.08)' %}
+        {% set r_border = 'var(--verdict-red)' %}
+        {% set r_dot = 'var(--verdict-red)' %}
+        {% set r_label = 'High overlap' %}
+    {% else %}
+        {% set r_bg = 'rgba(244,121,32,0.08)' %}
+        {% set r_border = 'var(--verdict-amber)' %}
+        {% set r_dot = 'var(--verdict-amber)' %}
+        {% set r_label = 'Moderate overlap' %}
+    {% endif %}
+    <div style="display:flex; align-items:flex-start; gap:14px; padding:14px 18px;
+                background:{{ r_bg }}; border:1.5px solid {{ r_border }}; border-radius:10px;">
+        <span style="width:10px; height:10px; border-radius:50%; background:{{ r_dot }};
+                      flex-shrink:0; margin-top:4px;"></span>
+        <div>
+            <div style="font-weight:700; font-size:1rem; color:{{ r_dot }}; margin-bottom:4px;">{{ r_label }}</div>
+            <p style="margin:0; font-size:0.82rem; color:var(--text-secondary);">{{ result.route_recommendation }}</p>
+            <p style="margin:6px 0 0; font-size:0.75rem; color:var(--text-muted);">
+                Colour indicates the overlap level from the automated analysis. The final licensing decision is made manually.
+            </p>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     SECTION 1 — SUBMITTED TIMETABLE (direction sections)
+     ═══════════════════════════════════════════════════════════ -->
+<div class="section animate-in">
+
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; flex-wrap:wrap; gap:12px;">
+        <h2 class="section-title" style="margin-bottom:0;">
+            📋 Submitted Timetable
+        </h2>
+        <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <span class="tt-legend-item green">🟢 Low stop overlap</span>
+            <span class="tt-legend-item amber">🟡 Moderate stop overlap</span>
+            <span class="tt-legend-item red">🔴 High stop overlap</span>
+        </div>
+    </div>
+
+    <p style="color:var(--text-muted); font-size:0.8rem; margin-bottom:20px;">
+        Each table represents one direction of the route. Cell colour reflects the stop-level overlap score for that departure.
+        Scroll horizontally to see all trip columns.
+    </p>
+
+    {% if sections %}
+        {% for section in sections %}
+        <div style="margin-bottom:32px;">
+
+            <!-- Direction header -->
+            <div class="tt-dir-header">
+                <span class="tt-dir-badge">{{ loop.index }}</span>
+                <span class="tt-dir-title">{{ section.title }}</span>
+                <span class="tt-dir-meta">{{ section.trip_count }} trip(s) · {{ section.stop_count }} stop(s)</span>
+            </div>
+
+            <div class="card" style="padding:0; overflow:hidden;">
+                <div class="tt-wrap">
+                    <table class="tt-table">
+                        <thead>
+                            <!-- Row 1: fixed col labels (rowspan=2) + one <th> per operating-day group -->
+                            <tr>
+                                <th class="tt-head-fixed tt-col-name" rowspan="2">Stop Name</th>
+                                <th class="tt-head-fixed tt-col-loc"  rowspan="2">Stop Location</th>
+                                <th class="tt-head-fixed tt-col-id"   rowspan="2">Stop ID</th>
+                                {% for group in section.day_groups %}
+                                <th class="tt-head-days{% if not loop.first %} tt-head-days-next{% endif %}"
+                                    colspan="{{ group.trip_count }}">
+                                    {{ group.label }}
+                                </th>
+                                {% endfor %}
+                            </tr>
+                            <!-- Row 2: individual departure time labels (from first stop) -->
+                            <tr>
+                                {% if section.stops %}
+                                    {% for cell in section.stops[0].times %}
+                                    <th class="tt-head-time">
+                                        <div class="tt-time-label">
+                                            {{ cell.time[:5] if cell.time and cell.time|length >= 5 else (cell.time or '—') }}
+                                        </div>
+                                    </th>
+                                    {% endfor %}
+                                {% endif %}
+                            </tr>
+                        </thead>
+                        <tbody>
+                        {% for stop in section.stops %}
+                        <tr class="tt-row{% if loop.index is odd %} tt-row-odd{% endif %}">
+                            <td class="tt-cell-fixed tt-col-name">
+                                <strong>{{ stop.stop_name }}</strong>
+                            </td>
+                            <td class="tt-cell-fixed tt-col-loc">
+                                {{ stop.stop_location or '—' }}
+                            </td>
+                            <td class="tt-cell-fixed tt-col-id">
+                                {{ stop.stop_id }}
+                            </td>
+                            {% for cell in stop.times %}
+                                {% if cell.time %}
+                                    <td class="tt-cell tt-cell-{{ cell.verdict | lower if cell.verdict else 'none' }}"
+                                        title="{{ cell.verdict | replace('_',' ') | title if cell.verdict else '' }}">
+                                        <span class="tt-time-val">
+                                            {{ cell.time[:5] if cell.time|length >= 5 else cell.time }}
+                                        </span>
+                                    </td>
+                                {% else %}
+                                    <td class="tt-cell tt-cell-none">
+                                        <span class="tt-empty-dash">·</span>
+                                    </td>
+                                {% endif %}
+                            {% endfor %}
+                        </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div>
+        {% endfor %}
+
+        <!-- Summary counts -->
+        <div class="tt-summary-row">
+            <div class="tt-summary-item">
+                <span class="tt-summary-count">{{ result.total_stops }}</span>
+                <span class="tt-summary-label">Departures</span>
+            </div>
+            <div class="tt-summary-item green">
+                <span class="tt-summary-count">{{ result.green_stops }}</span>
+                <span class="tt-summary-label">🟢 Low overlap</span>
+            </div>
+            <div class="tt-summary-item amber">
+                <span class="tt-summary-count">{{ result.amber_stops }}</span>
+                <span class="tt-summary-label">🟡 Moderate overlap</span>
+            </div>
+            <div class="tt-summary-item red">
+                <span class="tt-summary-count">{{ result.red_stops }}</span>
+                <span class="tt-summary-label">🔴 High overlap</span>
+            </div>
+        </div>
+
+    {% else %}
+    <div class="card empty-state">
+        <div class="icon">📋</div>
+        <h3>No timetable data</h3>
+        <p>No stop-level data was found for this analysis.</p>
+    </div>
+    {% endif %}
+
+</div>
+
+
+<!-- ═══════════════════════════════════════════════════════════
+     SECTION 2 — GTFS STATIC FEED SCHEDULES CONSIDERED
+     ═══════════════════════════════════════════════════════════ -->
+<div class="section animate-in">
+
+    <h2 class="section-title">
+        🔍 Existing GTFS Static Feed Schedules Considered
+    </h2>
+
+    {% if gtfs_comparison %}
+
+    <p style="color:var(--text-muted); font-size:0.8rem; margin-bottom:20px;">
+        The following existing services were identified as running within the configured timing window at the proposed stops.
+        Each card shows one stop. Within each card, rows represent existing GTFS Static feed services grouped by route.
+        The <strong>Δ min</strong> column shows how close the existing service is to the proposed departure.
+    </p>
+
+    {% for stop in gtfs_comparison %}
+    <div class="card gtfs-comp-card animate-in" style="margin-bottom:20px;">
+
+        <!-- Stop header -->
+        <div class="gtfs-comp-header">
+            <div>
+                <div class="gtfs-comp-stop-name">🚏 {{ stop.stop_name }}</div>
+                <div class="gtfs-comp-stop-id">Stop ID: {{ stop.stop_id }}</div>
+            </div>
+            <div class="gtfs-comp-proposed-times">
+                <span class="gtfs-comp-label">Proposed departures at this stop:</span>
+                <div class="gtfs-comp-time-chips">
+                    {% for pt in stop.proposed_times %}
+                        <span class="time-chip">{{ pt[:5] if pt|length >= 5 else pt }}</span>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Per-route comparison tables -->
+        {% for svc in stop.services_by_route %}
+        <div class="gtfs-route-block">
+            <div class="gtfs-route-header">
+                <span class="badge badge-blue" style="font-size:0.8rem;">Route {{ svc.route_id }}</span>
+                {% if svc.operator %}
+                    <span style="color:var(--text-secondary); font-size:0.85rem; margin-left:8px;">{{ svc.operator }}</span>
+                {% endif %}
+                <span style="color:var(--text-muted); font-size:0.75rem; margin-left:auto;">
+                    {{ svc.conflicts|length }} close departure(s) found
+                </span>
+            </div>
+
+            <div class="table-wrap" style="margin-top:8px;">
+                <table class="mini-table">
+                    <thead>
+                        <tr>
+                            <th>Existing Service Time</th>
+                            <th>Proposed Departure</th>
+                            <th>Δ min</th>
+                            <th>Within Window?</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {% for conflict in svc.conflicts %}
+                    <tr>
+                        <td>
+                            <strong>{{ conflict.existing_time[:8] if conflict.existing_time|length >= 8 else conflict.existing_time }}</strong>
+                        </td>
+                        <td style="color:var(--accent-teal);">
+                            {{ conflict.proposed_time[:5] if conflict.proposed_time|length >= 5 else conflict.proposed_time }}
+                        </td>
+                        <td>
+                            <span class="delta-badge {% if conflict.delta_minutes <= 10 %}delta-high{% else %}delta-low{% endif %}">
+                                {{ conflict.delta_minutes }} min
+                            </span>
+                        </td>
+                        <td>
+                            {% if conflict.delta_minutes <= 10 %}
+                                <span class="badge badge-red">Yes — within ±10 min</span>
+                            {% else %}
+                                <span class="badge badge-amber">Near miss</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endfor %}
+
+    </div>
+    {% endfor %}
+
+    {% else %}
+    <div class="card empty-state">
+        <div class="icon">✅</div>
+        <h3>No timing conflicts found</h3>
+        <p>
+            No existing GTFS Static feed services were identified within the timing window at any of the proposed stops.
+            The route appears to serve times not currently covered by existing schedules.
+        </p>
+    </div>
+    {% endif %}
+
+</div>
+
+{% endblock %}
+
+
+{% block scripts %}
+<style>
+/* ── Direction header ─────────────────────────────────────── */
+.tt-dir-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+.tt-dir-badge {
+    width: 24px; height: 24px;
+    background: var(--accent-teal);
+    color: #000;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.72rem; font-weight: 800;
+    flex-shrink: 0;
+}
+.tt-dir-title {
+    font-size: 0.95rem; font-weight: 700; color: var(--text-primary);
+}
+.tt-dir-meta {
+    font-size: 0.75rem; color: var(--text-muted);
+}
+
+/* ── Timetable wide table ─────────────────────────────────── */
+.tt-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+}
+
+.tt-table {
+    border-collapse: collapse;
+    font-size: 0.78rem;
+    white-space: nowrap;
+    min-width: 100%;
+}
+
+/* ── Sticky fixed columns ─────────────────────────────────── */
+.tt-col-name { left: 0;    min-width: 160px; max-width: 200px; white-space: normal; }
+.tt-col-loc  { left: 160px; min-width: 180px; max-width: 220px; white-space: normal; }
+.tt-col-id   { left: 340px; min-width: 80px; }
+
+/* Fixed column headers (row 1, rowspan=2) */
+.tt-head-fixed {
+    position: sticky;
+    background: var(--bg-secondary);
+    z-index: 3;
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 10px 12px;
+    border-bottom: 2px solid var(--border-color);
+    border-right: 1px solid var(--border-color);
+    vertical-align: middle;
+    text-align: left;
+}
+
+/* Operating-day group merged headers (e.g. "Monday – Sunday") */
+.tt-head-days {
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-align: center;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-color);
+    border-left: 2px solid var(--accent-teal);
+    letter-spacing: 0.03em;
+}
+/* Subsequent day-group columns get a slightly different accent to separate visually */
+.tt-head-days-next {
+    border-left: 2px solid var(--accent-blue);
+    color: var(--text-muted);
+}
+
+/* Individual trip time headers (row 2) */
+.tt-head-time {
+    min-width: 52px;
+    max-width: 52px;
+    padding: 0;
+    vertical-align: bottom;
+    background: var(--bg-secondary);
+    border-bottom: 2px solid var(--border-color);
+    text-align: center;
+    border-left: 1px solid rgba(148,163,184,0.12);
+}
+
+.tt-time-label {
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    padding: 8px 4px;
+    font-size: 0.68rem;
+    color: var(--text-secondary);
+    font-weight: 500;
+    letter-spacing: 0.03em;
+}
+
+/* ── Data rows ────────────────────────────────────────────── */
+.tt-cell-fixed {
+    position: sticky;
+    background: var(--bg-card);
+    z-index: 1;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-color);
+    border-right: 1px solid var(--border-color);
+    color: var(--text-primary);
+    vertical-align: middle;
+}
+
+.tt-col-name.tt-cell-fixed strong {
+    display: block;
+}
+
+.tt-col-id.tt-cell-fixed {
+    font-family: monospace;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+}
+
+.tt-col-loc.tt-cell-fixed {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.tt-row-odd .tt-cell-fixed {
+    background: var(--bg-card-hover);
+}
+
+/* Departure time cells */
+.tt-cell {
+    padding: 7px 3px;
+    text-align: center;
+    border-bottom: 1px solid var(--border-color);
+    border-left: 1px solid rgba(148,163,184,0.06);
+    min-width: 52px;
+}
+
+.tt-cell-green { background: rgba(34,197,94,0.12); }
+.tt-cell-amber { background: rgba(245,158,11,0.12); }
+.tt-cell-red   { background: rgba(239,68,68,0.12); }
+.tt-cell-none  { background: transparent; }
+
+.tt-time-val {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    font-family: monospace;
+    display: block;
+}
+
+.tt-cell-green .tt-time-val { color: var(--verdict-green); }
+.tt-cell-amber .tt-time-val { color: var(--verdict-amber); }
+.tt-cell-red   .tt-time-val { color: var(--verdict-red); }
+
+.tt-empty-dash {
+    color: var(--border-color);
+    font-size: 0.7rem;
+}
+
+/* Legend */
+.tt-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.75rem;
+    padding: 3px 10px;
+    border-radius: 100px;
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+}
+.tt-legend-item.green { background: rgba(34,197,94,0.1); border-color: rgba(34,197,94,0.2); color: var(--verdict-green); }
+.tt-legend-item.amber { background: rgba(245,158,11,0.1); border-color: rgba(245,158,11,0.2); color: var(--verdict-amber); }
+.tt-legend-item.red   { background: rgba(239,68,68,0.1);  border-color: rgba(239,68,68,0.2);  color: var(--verdict-red); }
+
+/* Summary row */
+.tt-summary-row {
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+    margin-top: 20px;
+    padding: 16px 4px 4px;
+    border-top: 1px solid var(--border-color);
+}
+.tt-summary-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+}
+.tt-summary-count {
+    font-size: 1.4rem;
+    font-weight: 800;
+    color: var(--accent-teal);
+}
+.tt-summary-item.green .tt-summary-count { color: var(--verdict-green); }
+.tt-summary-item.amber .tt-summary-count { color: var(--verdict-amber); }
+.tt-summary-item.red   .tt-summary-count { color: var(--verdict-red); }
+.tt-summary-label {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+/* ── GTFS comparison cards ───────────────────────────────── */
+.gtfs-comp-card {
+    padding: 20px 24px;
+}
+
+.gtfs-comp-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.gtfs-comp-stop-name {
+    font-size: 1rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+
+.gtfs-comp-stop-id {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    font-family: monospace;
+}
+
+.gtfs-comp-proposed-times {
+    text-align: right;
+}
+
+.gtfs-comp-label {
+    display: block;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 6px;
+}
+
+.gtfs-comp-time-chips {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.time-chip {
+    background: rgba(6,182,212,0.12);
+    border: 1px solid rgba(6,182,212,0.25);
+    color: var(--accent-teal);
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 3px 9px;
+    border-radius: 100px;
+    font-family: monospace;
+}
+
+.gtfs-route-block {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border-color);
+}
+
+.gtfs-route-block:first-of-type {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+}
+
+.gtfs-route-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.delta-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 100px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    font-family: monospace;
+}
+.delta-high { background: var(--verdict-red-bg); color: var(--verdict-red); }
+.delta-low  { background: var(--verdict-amber-bg); color: var(--verdict-amber); }
+</style>
+{% endblock %}

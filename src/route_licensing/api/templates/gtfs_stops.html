@@ -1,0 +1,364 @@
+{% extends "base.html" %}
+{% block title %}GTFS Static Stops — Route Licensing{% endblock %}
+
+{% block content %}
+
+<!-- ── Hero ──────────────────────────────────────────────────────────── -->
+<div class="page-hero animate-in">
+    <h1>GTFS Static Feed Stops Browser</h1>
+    <p>
+        All stops from the GTFS Static feed
+        {% if gtfs_ready %}
+        &nbsp;·&nbsp;
+        <strong>{{ total_stops }}</strong> unique stops
+        {% endif %}
+    </p>
+</div>
+
+{% if not gtfs_ready %}
+<div class="card empty-state animate-in" style="padding:60px 32px;">
+    <div class="icon">📡</div>
+    <h3>GTFS Static feed not loaded</h3>
+    <p>Check <a href="/api/v1/status">/api/v1/status</a> for details.</p>
+</div>
+
+{% else %}
+
+<!-- ── Filter Bar ────────────────────────────────────────────────────── -->
+<form method="get" action="/gtfs-stops" class="animate-in">
+    <div class="filter-bar" style="margin-bottom:20px;">
+        <div class="filter-bar-item">
+            <label class="filter-label" for="f-search">Stop Name / ID</label>
+            <input type="text" id="f-search" name="search" class="filter-input"
+                   placeholder="Search stops…" value="{{ search }}" autocomplete="off">
+        </div>
+        <div class="filter-bar-item">
+            <label class="filter-label" for="f-operator">Operator</label>
+            <select id="f-operator" name="operator" class="filter-select">
+                <option value="">All operators</option>
+                {% for op in data.operators %}
+                <option value="{{ op }}" {% if op == operator %}selected{% endif %}>{{ op }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="filter-bar-item">
+            <label class="filter-label" for="f-route">Route</label>
+            <select id="f-route" name="route" class="filter-select">
+                <option value="">All routes</option>
+                {% for r in data.routes %}
+                <option value="{{ r.route_id }}" {% if r.route_id == route %}selected{% endif %}>
+                    {{ r.route_label }} ({{ r.route_id }})
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="filter-bar-item" style="align-self:flex-end;">
+            <button type="submit" class="upload-btn" style="margin-top:0; padding:7px 20px;">
+                Search
+            </button>
+        </div>
+        {% if search or operator or route %}
+        <div class="filter-bar-item" style="align-self:flex-end;">
+            <a href="/gtfs-stops" class="filter-reset-btn">Reset</a>
+        </div>
+        {% endif %}
+        <div class="filter-count-display">{{ data.total }} stop(s) found</div>
+    </div>
+</form>
+
+<!-- ── Stops Table ───────────────────────────────────────────────────── -->
+{% if data.stops %}
+
+<div class="card animate-in" style="padding:0; overflow:hidden;">
+    <table class="stops-table">
+        <thead>
+            <tr>
+                <th>Stop Name</th>
+                <th>Stop ID</th>
+                <th>Coordinates</th>
+                <th>Routes</th>
+                <th>Operators</th>
+                <th>Services</th>
+                <th>First Dep</th>
+                <th>Last Dep</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for stop in data.stops %}
+        <tr class="stop-row{% if loop.index is odd %} stop-row-odd{% endif %}">
+            <td class="stop-name-cell">
+                <strong>{{ stop.stop_name }}</strong>
+            </td>
+            <td class="stop-id-cell">
+                {{ stop.stop_id }}
+                {% if stop.stop_code %}
+                <div style="font-size:0.7rem; color:var(--text-muted); margin-top:2px;">Code: {{ stop.stop_code }}</div>
+                {% endif %}
+            </td>
+            <td class="stop-coord-cell">
+                <a href="https://www.google.com/maps?q={{ stop.stop_lat }},{{ stop.stop_lon }}"
+                   target="_blank" rel="noopener" class="coord-link"
+                   title="Open in Google Maps">
+                    {{ "%.5f"|format(stop.stop_lat) }},
+                    {{ "%.5f"|format(stop.stop_lon) }}
+                    <span class="map-icon">🗺</span>
+                </a>
+            </td>
+            <td class="stop-routes-cell">
+                {% for rl in stop.routes[:8] %}
+                <span class="route-chip">{{ rl }}</span>
+                {% endfor %}
+                {% if stop.routes|length > 8 %}
+                <span class="route-chip route-chip-more">+{{ stop.routes|length - 8 }} more</span>
+                {% endif %}
+            </td>
+            <td class="stop-ops-cell">
+                <span class="op-tag">{{ stop.operators | join(', ') }}</span>
+            </td>
+            <td class="stop-svc-cell">
+                <span class="svc-count">{{ stop.num_services }}</span>
+            </td>
+            <td class="stop-time-cell">{{ stop.first_dep }}</td>
+            <td class="stop-time-cell">{{ stop.last_dep }}</td>
+            <td style="padding:6px 10px; text-align:right;">
+                <a href="/gtfs-stops?search={{ stop.stop_id }}"
+                   class="detail-link" title="Filter to this stop">⬡</a>
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<!-- ── Pagination ─────────────────────────────────────────────────────── -->
+{% if data.total_pages > 1 %}
+<div class="pagination-row animate-in">
+    {% if data.page > 1 %}
+    <a href="/gtfs-stops?page={{ data.page - 1 }}&search={{ search }}&operator={{ operator }}&route={{ route }}"
+       class="page-btn">← Prev</a>
+    {% else %}
+    <span class="page-btn page-btn-disabled">← Prev</span>
+    {% endif %}
+
+    {% for p in range(1, data.total_pages + 1) %}
+        {% if p == data.page %}
+        <span class="page-btn page-btn-active">{{ p }}</span>
+        {% elif p <= 3 or p >= data.total_pages - 2 or (p >= data.page - 2 and p <= data.page + 2) %}
+        <a href="/gtfs-stops?page={{ p }}&search={{ search }}&operator={{ operator }}&route={{ route }}"
+           class="page-btn">{{ p }}</a>
+        {% elif p == 4 or p == data.total_pages - 3 %}
+        <span class="page-btn page-btn-disabled">…</span>
+        {% endif %}
+    {% endfor %}
+
+    {% if data.page < data.total_pages %}
+    <a href="/gtfs-stops?page={{ data.page + 1 }}&search={{ search }}&operator={{ operator }}&route={{ route }}"
+       class="page-btn">Next →</a>
+    {% else %}
+    <span class="page-btn page-btn-disabled">Next →</span>
+    {% endif %}
+</div>
+{% endif %}
+
+{% else %}
+<div class="card empty-state animate-in" style="padding:48px 32px;">
+    <div class="icon">🔍</div>
+    <h3>No stops found</h3>
+    <p>Try adjusting the search, operator, or route filter.</p>
+</div>
+{% endif %}
+
+{% endif %}{# /gtfs_ready #}
+
+{% endblock %}
+
+
+{% block scripts %}
+<style>
+/* ── Stops table ──────────────────────────────────────────────────────── */
+.stops-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+}
+.stops-table thead tr {
+    background: var(--bg-secondary);
+    border-bottom: 2px solid var(--border-color);
+}
+.stops-table thead th {
+    padding: 10px 12px;
+    text-align: left;
+    color: var(--text-muted);
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.stop-row { border-bottom: 1px solid var(--border-color); transition: background 0.1s; }
+.stop-row:hover { background: var(--bg-card-hover); }
+.stop-row-odd { background: rgba(0,0,0,0.08); }
+
+.stop-name-cell {
+    padding: 8px 12px;
+    color: var(--text-primary);
+    min-width: 160px;
+    max-width: 220px;
+}
+.stop-id-cell {
+    padding: 8px 12px;
+    font-family: monospace;
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+.stop-coord-cell {
+    padding: 8px 12px;
+    white-space: nowrap;
+}
+.coord-link {
+    font-family: monospace;
+    font-size: 0.72rem;
+    color: var(--accent-teal);
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+.coord-link:hover { text-decoration: underline; }
+.map-icon { font-size: 0.85rem; }
+
+.stop-routes-cell {
+    padding: 6px 10px;
+    min-width: 140px;
+    max-width: 260px;
+}
+.route-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 7px;
+    margin: 2px 2px;
+    background: rgba(0,155,158,0.12);
+    border: 1px solid rgba(0,155,158,0.25);
+    border-radius: 100px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    color: var(--accent-teal);
+    font-family: monospace;
+    white-space: nowrap;
+}
+.route-chip-more {
+    background: rgba(129,148,163,0.1);
+    border-color: rgba(129,148,163,0.2);
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.stop-ops-cell {
+    padding: 8px 10px;
+    max-width: 160px;
+}
+.op-tag {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+}
+
+.stop-svc-cell { padding: 8px 12px; text-align: center; }
+.svc-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 28px;
+    height: 22px;
+    padding: 0 6px;
+    background: rgba(0,155,158,0.12);
+    border-radius: var(--radius-sm);
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--accent-teal);
+}
+
+.stop-time-cell {
+    padding: 8px 12px;
+    font-family: monospace;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.detail-link {
+    color: var(--text-muted);
+    font-size: 1rem;
+    text-decoration: none;
+    transition: color 0.15s;
+}
+.detail-link:hover { color: var(--accent-teal); }
+
+/* ── Filter bar (shared with gtfs_routes.html) ───────────────────────── */
+.filter-bar {
+    display: flex; align-items: flex-end; flex-wrap: wrap;
+    gap: 12px; margin-bottom: 14px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 14px 16px;
+}
+.filter-bar-item { display:flex; flex-direction:column; gap:4px; }
+.filter-label {
+    font-size:0.65rem; text-transform:uppercase;
+    letter-spacing:0.07em; color:var(--text-muted);
+}
+.filter-input, .filter-select {
+    background: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 0.8rem;
+    padding: 6px 10px;
+    outline: none;
+    min-width: 160px;
+}
+.filter-input:focus, .filter-select:focus { border-color: var(--accent-teal); }
+.filter-reset-btn {
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    font-size: 0.8rem;
+    padding: 6px 14px;
+    cursor: pointer;
+    transition: all 0.15s;
+    text-decoration: none;
+    display: inline-block;
+}
+.filter-reset-btn:hover { border-color:var(--accent-teal); color:var(--accent-teal); }
+.filter-count-display {
+    margin-left: auto; font-size: 0.75rem;
+    color: var(--text-muted); align-self: flex-end; padding-bottom: 6px;
+}
+
+/* ── Pagination ──────────────────────────────────────────────────────── */
+.pagination-row {
+    display: flex; align-items: center; gap: 6px;
+    flex-wrap: wrap; justify-content: center; margin: 32px 0;
+}
+.page-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 36px; height: 36px; padding: 0 10px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    font-size: 0.82rem; font-weight: 500;
+    text-decoration: none; transition: all 0.15s;
+}
+.page-btn:hover { border-color: var(--accent-teal); color: var(--accent-teal); }
+.page-btn-active {
+    background: var(--accent-teal); border-color: var(--accent-teal);
+    color: #000; font-weight: 700; pointer-events: none;
+}
+.page-btn-disabled { opacity: 0.35; pointer-events: none; }
+</style>
+{% endblock %}

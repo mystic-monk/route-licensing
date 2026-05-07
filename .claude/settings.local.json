@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/python -c ':*)",
+      "Bash(.venv/Scripts/python -c \"from route_licensing.ingestion.request_parser import parse_excel_request; print\\('OK'\\)\")",
+      "Bash(python -c ' *)",
+      "Read(//c/Users/lankush.arya/Dev/route_licensing/src/route_licensing/core/**)",
+      "Bash(python -c \"from route_licensing.analysis.od_checker import check_od_coverage; from route_licensing.core.config import Config; print\\('OK'\\)\")",
+      "Bash(python -c \"from route_licensing.engine.decision_engine import analyse_route; print\\('OK'\\)\")",
+      "Bash(python -c \"from route_licensing.engine.decision_engine import analyse_route, _od_verdict, _VERDICT_RANK; print\\('OK'\\)\")",
+      "Bash(python -c \"from route_licensing.engine.decision_engine import analyse_route, _od_verdict; print\\('OK'\\)\")",
+      "Bash(python -c \"from route_licensing.engine.decision_engine import analyse_route, _VERDICT_RANK; print\\('OK'\\)\")",
+      "Bash(python -c \"from src.route_licensing.analysis.od_checker import check_od_coverage, _check_two_leg_journey, _build_trip_to_stops_index; print\\('od_checker OK'\\)\")",
+      "Bash(python -c \"from src.route_licensing.engine.decision_engine import analyse_route, _od_verdict; print\\('decision_engine OK'\\)\")",
+      "Bash(python -c \"from src.route_licensing.engine.decision_engine import analyse_route, _explain_route, _od_verdict; print\\('OK'\\)\")",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git tag *)",
+      "Bash(python -c \"from src.route_licensing.analysis.od_checker import check_od_coverage; from src.route_licensing.engine.decision_engine import analyse_route; from src.route_licensing.analysis.timing_checker import check_timing_conflicts; print\\('imports OK'\\)\")",
+      "Bash(python -c \"from src.route_licensing.core.config import Config; from src.route_licensing.api.main import app; print\\('imports OK'\\)\")",
+      "Bash(python3 -c \"from src.route_licensing.core.config import Config; from src.route_licensing.api.main import app; print\\('imports OK'\\)\")",
+      "PowerShell(python -c \"from src.route_licensing.core.config import Config; print\\('config OK'\\); from src.route_licensing.ingestion.gtfsr_loader import fetch_trip_updates; print\\('all OK'\\)\" 2>&1)"
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/python -c ' *)",
+      "Bash(.venv/Scripts/python -c \"import openpyxl; print\\(openpyxl.__version__\\)\")",
+      "Bash(python -c \"from route_licensing.api.main import app; print\\('OK'\\)\")",
+      "Bash(python -c \"from route_licensing.analysis.od_checker import check_od_coverage; from route_licensing.engine.decision_engine import analyse_route; print\\('OK'\\)\")",
+      "Bash(python -c \"from datetime import datetime,timezone; print\\(datetime.now\\(tz=timezone.utc\\).strftime\\('%-d %b %Y'\\)\\)\")",
+      "Bash(python -c \"from datetime import datetime,timezone; import os; mtime=os.path.getmtime\\('data/gtfs_ireland.zip'\\); dt=datetime.fromtimestamp\\(mtime,tz=timezone.utc\\); print\\(f\\\\\"{dt.day} {dt.strftime\\('%b'\\)} {dt.year}\\\\\"\\)\")",
+      "Bash(python -c ' *)",
+      "PowerShell(python -c \"from src.route_licensing.ingestion.gtfs_static_loader import build_stop_service_index, build_trip_index; from src.route_licensing.api.main import _transport_mode, _build_gtfs_route_timetables; print\\('OK'\\)\" 2>&1)"
+    ]
+  }
+}
