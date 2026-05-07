@@ -469,8 +469,7 @@
    ═══════════════════════════════════════════════════════════════════════ #}
 <div class="section animate-in">
 
-    <details {% if od_coverage and od_coverage.total_pairs > 0 %}{% else %}open{% endif %}>
-    <summary style="cursor:pointer; list-style:none; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:0; padding:4px 0;">
+    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
         <div style="display:flex; align-items:center; gap:10px;">
             <h2 class="section-title" style="margin:0;">📊 Stop-Level Evidence</h2>
             <span style="font-size:0.7rem; font-weight:500; color:var(--text-muted); background:rgba(100,116,139,0.1);
@@ -478,18 +477,17 @@
                 Supporting only · does not determine the overlap assessment
             </span>
         </div>
-        {% if od_coverage and od_coverage.total_pairs > 0 %}
-        <span style="font-size:0.78rem; color:var(--accent-teal); font-weight:500;">▸ Click to expand stop-level detail</span>
-        {% else %}
         <span style="color:var(--text-muted); font-size:0.8rem;">Click any column header to sort. Expand a trip to see stop detail.</span>
-        {% endif %}
-    </summary>
-    {% if od_coverage and od_coverage.total_pairs > 0 %}
-    <p style="font-size:0.78rem; color:var(--text-muted); margin:10px 0 16px; padding:8px 12px;
-              background:rgba(100,116,139,0.05); border:1px solid rgba(100,116,139,0.2); border-radius:6px;">
-        Stop-level scores measure geographic overlap between individual stops — they are <strong>not</strong> the primary analysis signal.
-        The A→B journey check above determines the overlap level. Use this table to understand <em>which stops</em> share corridor with existing services.
-    </p>
+    </div>
+
+    {% if map_data and map_data.proposed_stops %}
+    <div class="card" style="padding:0; overflow:hidden; margin-bottom:20px;">
+        <div style="padding:10px 16px; border-bottom:1px solid var(--border); font-size:0.78rem; color:var(--text-muted); display:flex; align-items:center; gap:8px;">
+            <span>🗺</span>
+            <span>Proposed stops colour-coded by overlap level · existing overlapping routes shown as dashed lines</span>
+        </div>
+        <div id="stop-evidence-map" style="height:380px; width:100%;"></div>
+    </div>
     {% endif %}
 
     <!-- Filter bar -->
@@ -702,7 +700,6 @@
             </div>
         </div>
     </div>
-    </details>
 
 </div>
 
@@ -1119,9 +1116,10 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
-/* Google Maps style controls */
-#route-map { font-family: 'Google Sans', Roboto, Arial, sans-serif; }
-#route-map .leaflet-control-zoom a {
+/* Google Maps style controls — applied to both maps */
+#route-map, #stop-evidence-map { font-family: 'Google Sans', Roboto, Arial, sans-serif; }
+#route-map .leaflet-control-zoom a,
+#stop-evidence-map .leaflet-control-zoom a {
     background: #fff;
     color: #666;
     border: none;
@@ -1131,9 +1129,12 @@
     width: 28px;
     height: 28px;
 }
-#route-map .leaflet-control-zoom a:hover { background: #f5f5f5; color: #333; }
-#route-map .leaflet-control-zoom { border: none; box-shadow: 0 1px 4px rgba(0,0,0,0.3); border-radius: 2px; }
-#route-map .leaflet-tooltip {
+#route-map .leaflet-control-zoom a:hover,
+#stop-evidence-map .leaflet-control-zoom a:hover { background: #f5f5f5; color: #333; }
+#route-map .leaflet-control-zoom,
+#stop-evidence-map .leaflet-control-zoom { border: none; box-shadow: 0 1px 4px rgba(0,0,0,0.3); border-radius: 2px; }
+#route-map .leaflet-tooltip,
+#stop-evidence-map .leaflet-tooltip {
     background: #fff;
     border: none;
     border-radius: 8px;
@@ -1143,9 +1144,12 @@
     font-size: 0.78rem;
     color: #3c4043;
 }
-#route-map .leaflet-tooltip::before { display: none; }
-#route-map .leaflet-attribution-flag { display: none; }
-#route-map .leaflet-control-attribution {
+#route-map .leaflet-tooltip::before,
+#stop-evidence-map .leaflet-tooltip::before { display: none; }
+#route-map .leaflet-attribution-flag,
+#stop-evidence-map .leaflet-attribution-flag { display: none; }
+#route-map .leaflet-control-attribution,
+#stop-evidence-map .leaflet-control-attribution {
     background: rgba(255,255,255,0.85);
     color: #777;
     font-size: 0.65rem;
@@ -1281,6 +1285,61 @@
         return div;
     };
     legend.addTo(map);
+})();
+</script>
+
+<script>
+// Stop-evidence map (Section 2) — same data, separate Leaflet instance
+(function () {
+    const el = document.getElementById('stop-evidence-map');
+    if (!el) return;
+    const mapData = {{ map_data | tojson }};
+    if (!mapData.proposed_stops.length) return;
+
+    const map2 = L.map('stop-evidence-map', { zoomControl: true });
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+        subdomains: 'abcd',
+        maxZoom: 19,
+    }).addTo(map2);
+
+    const verdictColour = { GREEN: '#1e8e3e', AMBER: '#f29900', RED: '#d93025' };
+
+    // Existing overlapping route polylines
+    (mapData.nearby_lines || []).forEach(route => {
+        if (!route.coords.length) return;
+        L.polyline(route.coords, {
+            color: route.colour,
+            weight: 4,
+            opacity: 0.65,
+            dashArray: '8 5',
+        }).addTo(map2).bindTooltip(
+            `<strong style="color:#3c4043">${route.route_label}</strong><br>
+             <span style="color:#80868b">${route.operator}</span>`,
+            { sticky: true }
+        );
+    });
+
+    // Proposed route line
+    const proposedCoords = mapData.proposed_stops.map(s => [s.lat, s.lon]);
+    L.polyline(proposedCoords, { color: '#1A73E8', weight: 5, opacity: 0.92 }).addTo(map2);
+
+    // Stop markers colour-coded by overlap verdict
+    mapData.proposed_stops.forEach(stop => {
+        const fill = verdictColour[stop.verdict] || '#9aa0a6';
+        const verdictLabel = { GREEN: 'Low overlap', AMBER: 'Moderate overlap', RED: 'High overlap' };
+        L.circleMarker([stop.lat, stop.lon], {
+            radius: 9, fillColor: fill, color: '#fff', weight: 2.5,
+            opacity: 1, fillOpacity: 1,
+        }).addTo(map2).bindTooltip(
+            `<strong style="color:#3c4043">${stop.stop_name}</strong><br>
+             <span style="color:${fill};font-weight:600">${verdictLabel[stop.verdict] || stop.verdict}</span>`,
+            { direction: 'top', offset: [0, -12] }
+        );
+    });
+
+    map2.fitBounds(L.latLngBounds(proposedCoords).pad(0.18));
 })();
 </script>
 {% endif %}

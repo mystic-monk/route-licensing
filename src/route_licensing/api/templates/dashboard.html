@@ -16,7 +16,7 @@
                 &nbsp;·&nbsp; {{ stats.gtfs_stops }} stop-service records
                 {% if gtfs_refreshed %}&nbsp;·&nbsp; Last fetched: <strong style="color:#fff; background:rgba(0,137,123,0.4); padding:1px 7px; border-radius:4px;">{{ gtfs_refreshed }}</strong>{% endif %}
                 &nbsp;·&nbsp;
-                <button id="gtfs-refresh-btn" onclick="refreshGtfs()"
+                <button id="gtfs-refresh-btn" onclick="triggerGtfsRefresh()"
                         style="background:rgba(255,255,255,0.1); border:1px solid rgba(255,255,255,0.25);
                                border-radius:4px; color:#fff; font-size:0.72rem; padding:1px 8px;
                                cursor:pointer; line-height:1.6;">
@@ -30,6 +30,16 @@
                 <span style="width:6px;height:6px;border-radius:50%;background:var(--verdict-red);flex-shrink:0;"></span>
                 GTFS Static feed not loaded — analysis unavailable
             </span>
+        {% endif %}
+        {% if gtfs_refresh_in_progress %}
+        <span id="gtfs-refresh-indicator" style="display:inline-flex; align-items:center; gap:6px;
+                      background:rgba(251,191,36,0.12); border:1px solid rgba(251,191,36,0.3);
+                      border-radius:100px; padding:3px 12px; color:var(--verdict-amber); font-size:0.78rem;">
+            <span class="gtfs-spinner" style="width:10px;height:10px;border:2px solid rgba(251,191,36,0.3);
+                  border-top-color:var(--verdict-amber);border-radius:50%;flex-shrink:0;
+                  animation:spin 0.9s linear infinite;"></span>
+            Refreshing feed in background…
+        </span>
         {% endif %}
     </div>
 </div>
@@ -462,33 +472,67 @@ function updateChangesThreshold(val) {
     document.querySelectorAll('.tier-shared-val').forEach(el => el.textContent = pct);
 }
 
-function refreshGtfs() {
-    const btn = document.getElementById('gtfs-refresh-btn');
-    btn.disabled = true;
-    btn.textContent = '↻ Fetching…';
-    fetch('/api/v1/refresh-gtfs', { method: 'POST' })
-        .then(r => r.json().then(j => ({ ok: r.ok, body: j })))
-        .then(({ ok, body }) => {
-            if (ok) {
-                btn.textContent = '✓ Done — reloading…';
-                setTimeout(() => location.reload(), 1200);
+// Spin keyframe (injected once so CSS animation works without a stylesheet edit)
+(function() {
+    if (!document.getElementById('gtfs-spin-style')) {
+        const s = document.createElement('style');
+        s.id = 'gtfs-spin-style';
+        s.textContent = '@keyframes spin { to { transform: rotate(360deg); } }';
+        document.head.appendChild(s);
+    }
+})();
+
+function _showRefreshingIndicator() {
+    let ind = document.getElementById('gtfs-refresh-indicator');
+    if (!ind) {
+        // Dynamically inject the indicator if the template didn't render one
+        ind = document.createElement('span');
+        ind.id = 'gtfs-refresh-indicator';
+        ind.style.cssText = 'display:inline-flex;align-items:center;gap:6px;background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.3);border-radius:100px;padding:3px 12px;color:var(--verdict-amber);font-size:0.78rem;';
+        ind.innerHTML = '<span style="width:10px;height:10px;border:2px solid rgba(251,191,36,0.3);border-top-color:var(--verdict-amber);border-radius:50%;flex-shrink:0;animation:spin 0.9s linear infinite;"></span> Refreshing feed in background…';
+        const hero = document.querySelector('.page-hero > div');
+        if (hero) hero.appendChild(ind);
+    }
+    ind.style.display = 'inline-flex';
+}
+
+function _pollUntilReady() {
+    fetch('/api/v1/refresh-gtfs/status')
+        .then(r => r.json())
+        .then(data => {
+            if (!data.refresh_in_progress) {
+                location.reload();
             } else {
-                btn.textContent = '✕ Failed';
-                btn.style.color = 'var(--verdict-red)';
-                btn.disabled = false;
-                if (typeof showToast === 'function') {
-                    showToast('GTFS refresh failed: ' + (body.detail || 'see server logs'), 'error');
-                }
+                setTimeout(_pollUntilReady, 4000);
+            }
+        })
+        .catch(() => setTimeout(_pollUntilReady, 8000));
+}
+
+function triggerGtfsRefresh() {
+    const btn = document.getElementById('gtfs-refresh-btn');
+    if (btn) { btn.disabled = true; btn.textContent = '↻ Starting…'; }
+    fetch('/api/v1/refresh-gtfs', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.status === 'started' || data.status === 'in_progress') {
+                if (btn) btn.textContent = '↻ Running…';
+                _showRefreshingIndicator();
+                _pollUntilReady();
+            } else {
+                if (btn) { btn.textContent = '✕ Failed'; btn.disabled = false; }
             }
         })
         .catch(err => {
-            btn.textContent = '✕ Error';
-            btn.disabled = false;
-            if (typeof showToast === 'function') {
-                showToast('Network error: ' + err.message, 'error');
-            }
+            if (btn) { btn.textContent = '✕ Error'; btn.disabled = false; }
+            if (typeof showToast === 'function') showToast('Network error: ' + err.message, 'error');
         });
 }
+
+// If a refresh was already in progress when the page loaded, auto-poll
+{% if gtfs_refresh_in_progress %}
+(function() { _pollUntilReady(); })();
+{% endif %}
 
 (function () {
     const input  = document.getElementById('demand-file-input');

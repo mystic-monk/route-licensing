@@ -23,6 +23,7 @@ import logging
 import os
 import shutil
 import tempfile
+import threading
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -84,8 +85,10 @@ _gtfs_service_date: Optional[date] = None
 _gtfs_all_stop_ids: frozenset = frozenset()
 _gtfs_stop_id_suffix_map: dict = {}
 _gtfs_stop_code_map: dict = {}
+_gtfs_stop_id_to_code_map: dict = {}
 
 _demand_index: DemandIndex = {}
+_gtfs_refresh_in_progress: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -94,7 +97,24 @@ _demand_index: DemandIndex = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    _load_gtfs_index()
+    global _gtfs_refresh_in_progress
+    gtfs_path = cfg.static_gtfs_path
+    # Immediately serve whatever is on disk — don't block startup on a download.
+    if os.path.exists(gtfs_path):
+        _load_gtfs_from_disk()
+    # Spawn a background download if the zip is absent or older than the max age.
+    age_days: Optional[int] = None
+    if os.path.exists(gtfs_path):
+        age_days = (
+            datetime.now(timezone.utc)
+            - datetime.fromtimestamp(os.path.getmtime(gtfs_path), tz=timezone.utc)
+        ).days
+    needs_refresh = not os.path.exists(gtfs_path) or (age_days is not None and age_days >= _GTFS_MAX_AGE_DAYS)
+    if needs_refresh:
+        _gtfs_refresh_in_progress = True
+        t = threading.Thread(target=_refresh_gtfs_background, daemon=True, name="gtfs-refresh")
+        t.start()
+        logger.info("Background GTFS refresh started (age=%s days).", age_days)
     _load_demand_cache()
     yield
 
@@ -105,6 +125,7 @@ def _load_demand_cache() -> None:
     if cached:
         _demand_index = cached
         logger.info("Demand index restored from cache: %d records.", len(cached))
+    _ensure_demand_template()
 
 
 def _ensure_demand_template() -> None:
@@ -118,78 +139,59 @@ def _ensure_demand_template() -> None:
             logger.warning("Could not generate demand template: %s", exc)
 
 
-def _load_gtfs_index() -> None:
-    global _gtfs_index, _gtfs_trip_index, _gtfs_all_stop_ids, _gtfs_stop_id_suffix_map, _gtfs_stop_code_map, _gtfs_service_date
 
+def _load_gtfs_from_disk() -> bool:
+    """Build all GTFS indices from the local zip — no network call. Returns True on success."""
+    global _gtfs_index, _gtfs_trip_index, _gtfs_all_stop_ids
+    global _gtfs_stop_id_suffix_map, _gtfs_stop_code_map, _gtfs_stop_id_to_code_map, _gtfs_service_date
     gtfs_path = cfg.static_gtfs_path
-    _download_gtfs_if_needed(gtfs_path)
-
     if not os.path.exists(gtfs_path):
-        logger.critical(
-            "GTFS feed not found at '%s' and could not be downloaded automatically. "
-            "Download the feed manually from: %s",
-            gtfs_path,
-            _GTFS_STATIC_URL,
-        )
-        return
-
+        return False
     try:
         logger.info("Loading GTFS feed from %s ...", gtfs_path)
         feed, _gtfs_service_date = load_gtfs(gtfs_path)
-        _gtfs_index        = build_stop_service_index(feed)
-        _gtfs_trip_index   = build_trip_index(feed)
+        _gtfs_index      = build_stop_service_index(feed)
+        _gtfs_trip_index = build_trip_index(feed)
         _gtfs_all_stop_ids, _gtfs_stop_id_suffix_map, _gtfs_stop_code_map = load_all_stop_ids(gtfs_path)
+        _gtfs_stop_id_to_code_map = {v: k for k, v in _gtfs_stop_code_map.items()}
         logger.info(
             "GTFS feed loaded: %d stop-service records, %d routes, %d unique stops.",
             len(_gtfs_index),
             _gtfs_index["route_id"].nunique(),
             _gtfs_index["stop_id"].nunique(),
         )
+        return True
     except Exception as exc:
-        logger.critical(
-            "GTFS feed at '%s' could not be loaded: %s. "
-            "Check the file is a valid GTFS zip and restart the server.",
-            gtfs_path,
-            exc,
-        )
+        logger.critical("GTFS feed at '%s' could not be loaded: %s.", gtfs_path, exc)
+        return False
 
 
-def _download_gtfs_if_needed(local_path: str) -> None:
-    should_download = True
-
-    if os.path.exists(local_path):
-        age_days = (
-            datetime.now(timezone.utc)
-            - datetime.fromtimestamp(
-                os.path.getmtime(local_path), tz=timezone.utc
-            )
-        ).days
-        if age_days < _GTFS_MAX_AGE_DAYS:
-            logger.info(
-                "GTFS feed is %d day(s) old — reusing without re-downloading.",
-                age_days,
-            )
-            should_download = False
-
-    if not should_download:
-        return
-
+def _refresh_gtfs_background() -> None:
+    """Download fresh GTFS zip, then rebuild indices atomically. Runs in a daemon thread."""
+    global _gtfs_refresh_in_progress
+    gtfs_path = cfg.static_gtfs_path
+    tmp_path  = gtfs_path + ".tmp"
     try:
-        logger.info("Downloading GTFS static feed from %s ...", _GTFS_STATIC_URL)
-        os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
+        logger.info("Background GTFS refresh: downloading from %s ...", _GTFS_STATIC_URL)
+        os.makedirs(os.path.dirname(gtfs_path) or ".", exist_ok=True)
         response = http_requests.get(_GTFS_STATIC_URL, timeout=120, stream=True)
         response.raise_for_status()
-        with open(local_path, "wb") as f:
+        with open(tmp_path, "wb") as f:
             for chunk in response.iter_content(chunk_size=1024 * 1024):
                 f.write(chunk)
-        logger.info("GTFS static feed downloaded to %s.", local_path)
+        os.replace(tmp_path, gtfs_path)
+        logger.info("Background GTFS refresh: download complete — reloading indices ...")
+        _load_gtfs_from_disk()
+        logger.info("Background GTFS refresh: done.")
     except Exception as exc:
-        logger.warning(
-            "Could not download GTFS static feed: %s. "
-            "Place the file manually at '%s' and restart the server.",
-            exc,
-            local_path,
-        )
+        logger.warning("Background GTFS refresh failed: %s", exc)
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
+    finally:
+        _gtfs_refresh_in_progress = False
 
 
 def _gtfs_is_ready() -> bool:
@@ -514,13 +516,14 @@ async def dashboard(request: Request):
         gtfs_refreshed = f"{dt.day} {dt.strftime('%b')} {dt.year}"
 
     return templates.TemplateResponse(request, "dashboard.html", {
-        "active_page":    "dashboard",
-        "history":        history[:10],
-        "stats":          stats,
-        "gtfs_ready":     gtfs_ready,
-        "gtfs_refreshed": gtfs_refreshed,
-        "demand_loaded":  bool(_demand_index),
-        "demand_meta":    demand_meta,
+        "active_page":              "dashboard",
+        "history":                  history[:10],
+        "stats":                    stats,
+        "gtfs_ready":               gtfs_ready,
+        "gtfs_refreshed":           gtfs_refreshed,
+        "gtfs_refresh_in_progress": _gtfs_refresh_in_progress,
+        "demand_loaded":            bool(_demand_index),
+        "demand_meta":              demand_meta,
     })
 
 
@@ -660,18 +663,22 @@ def _build_map_data(
                      from trip_index (stop_sequence ordered) so lines follow
                      the actual road rather than connecting stops randomly.
     """
-    if gtfs_index.empty or not stop_analysis:
+    if not stop_analysis:
         return {"proposed_stops": [], "nearby_lines": []}
 
-    # Build stop_id → (lat, lon) from GTFS index.
-    coord_map: dict[str, tuple] = (
-        gtfs_index.drop_duplicates("stop_id")
-        .set_index("stop_id")[["stop_lat", "stop_lon"]]
-        .apply(lambda r: (r["stop_lat"], r["stop_lon"]), axis=1)
-        .to_dict()
-    )
+    # Build stop_id → (lat, lon) from GTFS index as fallback source.
+    coord_map: dict[str, tuple] = {}
+    if not gtfs_index.empty:
+        coord_map = (
+            gtfs_index.drop_duplicates("stop_id")
+            .set_index("stop_id")[["stop_lat", "stop_lon"]]
+            .apply(lambda r: (r["stop_lat"], r["stop_lon"]), axis=1)
+            .to_dict()
+        )
 
     # Proposed stops — deduplicated by stop_id, first-seen order.
+    # Primary source: stop_lat/stop_lon embedded in the analysis JSON.
+    # Fallback: GTFS service index coord_map.
     seen: set = set()
     proposed_stops = []
     for entry in stop_analysis:
@@ -679,7 +686,10 @@ def _build_map_data(
         if sid in seen:
             continue
         seen.add(sid)
-        lat, lon = coord_map.get(sid, (None, None))
+        lat = entry.get("stop_lat")
+        lon = entry.get("stop_lon")
+        if lat is None or lon is None:
+            lat, lon = coord_map.get(sid, (None, None))
         if lat is None:
             continue
         proposed_stops.append({
@@ -1098,6 +1108,20 @@ async def results_page(request: Request, ref_id: str):
     sections          = _build_sections_view(stop_analysis)
     nearby_routes     = _find_nearby_routes(stop_analysis, _gtfs_index)
 
+    # Back-fill coordinates into legacy analysis results that pre-date
+    # the stop_lat/stop_lon fields (added 2026-05).  Mutates in-memory
+    # only — does not rewrite the JSON file on disk.
+    if not _gtfs_index.empty and stop_analysis:
+        _coord_lookup: dict[str, tuple] = (
+            _gtfs_index.drop_duplicates("stop_id")
+            .set_index("stop_id")[["stop_lat", "stop_lon"]]
+            .apply(lambda r: (r["stop_lat"], r["stop_lon"]), axis=1)
+            .to_dict()
+        )
+        for stop in stop_analysis:
+            if stop.get("stop_lat") is None and stop["stop_id"] in _coord_lookup:
+                stop["stop_lat"], stop["stop_lon"] = _coord_lookup[stop["stop_id"]]
+
     # Enrich conflicting_services with route_label for display in stop detail rows.
     if not _gtfs_index.empty and "route_label" in _gtfs_index.columns:
         _label_lookup: dict[str, str] = (
@@ -1226,6 +1250,7 @@ async def run_analysis(
                 operator=operator,
                 valid_stop_ids=_gtfs_all_stop_ids if _gtfs_all_stop_ids else None,
                 stop_id_suffix_map=_gtfs_stop_id_suffix_map if _gtfs_stop_id_suffix_map else None,
+                stop_code_map=_gtfs_stop_code_map if _gtfs_stop_code_map else None,
             )
         except (ValueError, RuntimeError) as exc:
             logger.error("Excel parsing error: %s", exc, exc_info=True)
@@ -1238,7 +1263,13 @@ async def run_analysis(
             )
 
         try:
-            analysis = analyse_route(new_route_df, _gtfs_index, submission_cfg)
+            analysis = analyse_route(
+                new_route_df,
+                _gtfs_index,
+                submission_cfg,
+                trip_index=_gtfs_trip_index if not _gtfs_trip_index.empty else None,
+                demand_index=_demand_index if _demand_index else None,
+            )
         except Exception as exc:
             logger.exception("Decision engine error for file: %s", file.filename)
             raise HTTPException(status_code=500, detail=f"Analysis engine error: {exc}")
@@ -1258,61 +1289,6 @@ async def run_analysis(
                 os.remove(tmp_path)
             except OSError:
                 pass
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# HTML UI Endpoints
-# ══════════════════════════════════════════════════════════════════════════════
-
-@app.get("/", include_in_schema=False)
-async def dashboard(request: Request):
-    """HTML Dashboard: upload form + recent history."""
-    history = list_all_analyses(cfg.results_path)
-
-    stats = {
-        "total":       len(history),
-        "approved":    sum(1 for h in history if h["verdict"] == "APPROVE"),
-        "changes":     sum(1 for h in history if h["verdict"] == "APPROVE WITH CHANGES"),
-        "rejected":    sum(1 for h in history if h["verdict"] == "REJECT"),
-        "gtfs_routes": _gtfs_index["route_id"].nunique() if not _gtfs_index.empty else 0,
-        "gtfs_stops":  len(_gtfs_index),
-    }
-
-    return templates.TemplateResponse("dashboard.html", {
-        "request":     request,
-        "active_page": "dashboard",
-        "history":     history[:10],          # show 10 most recent
-        "stats":       stats,
-        "gtfs_mode":   _gtfs_mode,
-    })
-
-
-@app.get("/history", include_in_schema=False)
-async def history_page(request: Request):
-    """HTML History page: all analyses."""
-    history = list_all_analyses(cfg.results_path)
-    return templates.TemplateResponse("history.html", {
-        "request":     request,
-        "active_page": "history",
-        "history":     history,
-    })
-
-
-@app.get("/results/{ref_id}", include_in_schema=False)
-async def results_page(request: Request, ref_id: str):
-    """HTML Results page for a specific analysis."""
-    data = get_analysis_by_ref(ref_id, cfg.results_path)
-    if not data:
-        raise HTTPException(status_code=404, detail="Analysis not found")
-
-    considered_routes = _compile_considered_routes(data.get("stop_analysis", []))
-
-    return templates.TemplateResponse("results.html", {
-        "request":          request,
-        "active_page":      "results",
-        "result":           data,
-        "considered_routes": considered_routes,
-    })
 
 
 @app.get("/api/v1/results", tags=["Storage"])
@@ -1403,22 +1379,25 @@ async def export_for_powerbi(format: str = "json"):
 
 @app.post("/api/v1/refresh-gtfs", tags=["Health"])
 async def refresh_gtfs():
-    """
-    Forces a re-download of the GTFS static feed and reloads the index.
-    Deletes the local file first so the age check is bypassed.
-    """
-    gtfs_path = cfg.static_gtfs_path
-    try:
-        if os.path.exists(gtfs_path):
-            os.remove(gtfs_path)
-    except OSError as exc:
-        raise HTTPException(status_code=500, detail=f"Could not remove old feed: {exc}")
+    """Triggers a background re-download of the GTFS static feed. Returns immediately."""
+    global _gtfs_refresh_in_progress
+    if _gtfs_refresh_in_progress:
+        return {"status": "in_progress", "message": "GTFS refresh is already running in the background."}
+    _gtfs_refresh_in_progress = True
+    t = threading.Thread(target=_refresh_gtfs_background, daemon=True, name="gtfs-refresh")
+    t.start()
+    return {"status": "started", "message": "GTFS feed refresh started in the background."}
 
-    _load_gtfs_index()
 
-    if _gtfs_is_ready():
-        return {"status": "ok", "message": "GTFS feed refreshed successfully."}
-    raise HTTPException(status_code=503, detail="GTFS feed re-download failed. Check server logs.")
+@app.get("/api/v1/refresh-gtfs/status", tags=["Health"])
+async def refresh_gtfs_status():
+    """Returns the current background refresh status and GTFS readiness."""
+    return {
+        "refresh_in_progress": _gtfs_refresh_in_progress,
+        "gtfs_ready":          _gtfs_is_ready(),
+        "gtfs_routes":         int(_gtfs_index["route_id"].nunique()) if _gtfs_is_ready() else 0,
+        "gtfs_stops":          int(_gtfs_index["stop_id"].nunique())  if _gtfs_is_ready() else 0,
+    }
 
 
 @app.get("/api/v1/status", tags=["Health"])

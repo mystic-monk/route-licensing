@@ -99,6 +99,7 @@ def parse_excel_request(
     operator: str = "Unknown",
     valid_stop_ids: Optional[frozenset] = None,
     stop_id_suffix_map: Optional[dict] = None,
+    stop_code_map: Optional[dict] = None,
 ) -> pd.DataFrame:
     """
     Loads an NTA wide-format timetable Excel file and returns a flat
@@ -244,19 +245,25 @@ def parse_excel_request(
     # IDs that are already in their full form, or whose suffix is
     # ambiguous, are left unchanged.
     # ------------------------------------------------------------------
-    if stop_id_suffix_map:
+    if stop_id_suffix_map or stop_code_map:
         known = valid_stop_ids or (
             frozenset(stop_coordinate_index["stop_id"].astype(str).unique())
             if stop_coordinate_index is not None and not stop_coordinate_index.empty
             else frozenset()
         )
+        _suffix_map    = stop_id_suffix_map or {}
+        _stop_code_map = stop_code_map or {}
 
         def _normalise_id(sid: str) -> str:
             if sid in known:
                 return sid
-            resolved = stop_id_suffix_map.get(sid)
+            resolved = _stop_code_map.get(sid)
             if resolved:
-                logger.info("Normalised stop_id '%s' → '%s'.", sid, resolved)
+                logger.info("Normalised NaPTAN stop_code '%s' → '%s'.", sid, resolved)
+                return resolved
+            resolved = _suffix_map.get(sid)
+            if resolved:
+                logger.info("Normalised stop_id suffix '%s' → '%s'.", sid, resolved)
                 return resolved
             return sid
 

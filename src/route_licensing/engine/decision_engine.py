@@ -688,6 +688,8 @@ def analyse_route(
             "verdict":              colour,
             "recommendation":       VERDICT_COLOUR[colour],
             "explanation":          explanation,
+            "stop_lat":             float(stop["stop_lat"]) if pd.notna(stop.get("stop_lat")) else None,
+            "stop_lon":             float(stop["stop_lon"]) if pd.notna(stop.get("stop_lon")) else None,
         })
 
     # ------------------------------------------------------------------
