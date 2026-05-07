@@ -1,15 +1,107 @@
+"""
+request_parser.py
+=================
+Parses incoming route licensing proposals into the flat DataFrame
+format required by the analysis engine.
+
+Two entry points are provided:
+
+    parse_excel_request(file_path, stop_coordinate_index, operator)
+        Parses the wide-format NTA timetable Excel submission.
+
+    parse_new_route_request(request_dict)
+        Parses a programmatic dict submission (API / test use).
+
+Excel format — what the file actually contains
+-----------------------------------------------
+The submitted Excel file is a wide-format timetable, not a flat table.
+A single sheet may contain multiple direction sections. Each section has:
+
+    Row 1  — Section title  e.g. "Kinsale to Cork City"
+    Row 2  — Header         "Stop Name | Stop Location | Stop ID | Monday - Sunday"
+    Row 3+ — Data rows      stop_name | stop_location | stop_id | time | time | ...
+
+The times are datetime.time objects (openpyxl) representing individual
+departures from that stop. Each departure is expanded into its own row
+in the output DataFrame so the engine can check each one independently.
+
+Missing fields and how they are resolved
+-----------------------------------------
+- route_id:
+    Derived from the first section title found in the sheet.
+    Both directions share the same route_id so the engine produces a
+    single aggregate verdict for the full route.
+
+- operator:
+    Not present in the file. Must be passed as a parameter by the
+    caller (e.g. from a form field in the upload UI). Defaults to
+    "Unknown" with a warning logged.
+
+- stop_lat / stop_lon:
+    Not present in the file. Resolved by looking up the NTA stop_id
+    in stop_coordinate_index (the loaded GTFS static index).
+
+    If a stop_id cannot be found in the index, coordinates default to
+    None and a warning is logged. The timing conflict checker and
+    frequency scorer continue to work normally for those stops. The
+    corridor detector skips any stop whose coordinates are None, so
+    corridor overlap will not be assessed for unresolved stops.
+
+    This allows the application to run against the demo GTFS data even
+    when the submitted timetable contains stop IDs that are not present
+    in the demo index (e.g. Cork/Kinsale stops against Dublin demo data).
+
+Post-midnight services
+----------------------
+datetime.time(0, 20) is treated as 00:20:00 (20 minutes past midnight),
+not 24:20:00. This affects frequency scoring for late-evening stops.
+The NTA team should confirm the preferred treatment before production use.
+"""
+
+import json
+import logging
+import re
 import uuid
 from datetime import time as dt_time
 from typing import Optional
 
 import openpyxl
 import pandas as pd
-from typing import Dict
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Required output columns — must match decision_engine.py expectations
+# ---------------------------------------------------------------------------
+_OUTPUT_COLUMNS: list[str] = [
+    "route_id",
+    "operator",
+    "section_idx",
+    "section_title",
+    "section_day_groups",
+    "trip_idx",
+    "stop_id",
+    "stop_name",
+    "stop_location",
+    "stop_lat",
+    "stop_lon",
+    "arrival_time",
+]
 
 
-def _clean_arrival_time(time_val):
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def parse_excel_request(
+    file_path: str,
+    stop_coordinate_index: Optional[pd.DataFrame] = None,
+    operator: str = "Unknown",
+    valid_stop_ids: Optional[frozenset] = None,
+    stop_id_suffix_map: Optional[dict] = None,
+) -> pd.DataFrame:
     """
-    Loads a wide-format timetable Excel file and returns a flat
+    Loads an NTA wide-format timetable Excel file and returns a flat
     DataFrame ready for the analysis engine.
 
     Parameters
@@ -24,7 +116,7 @@ def _clean_arrival_time(time_val):
         default to None and a warning is logged. Corridor detection is
         skipped for those stops but all other analysis continues.
     operator:
-        The operating company name. Not present in the standard
+        The operating company name. Not present in the standard NTA
         timetable template; must be passed by the caller. Defaults to
         "Unknown" with a warning.
 
@@ -146,33 +238,25 @@ def _clean_arrival_time(time_val):
     # Step 4 — Normalise short numeric stop IDs to full GTFS stop IDs
     #
     # Submitted timetables sometimes use only the trailing numeric portion
-    # of a stop ID (e.g. '247191' instead of '8380B247191').
+    # of an NTA stop ID (e.g. '247191' instead of '8380B247191').
     # When a suffix map is provided, rewrite any unrecognised short ID to
     # its canonical full form where the mapping is unambiguous (1:1).
     # IDs that are already in their full form, or whose suffix is
     # ambiguous, are left unchanged.
     # ------------------------------------------------------------------
-    if stop_id_suffix_map or stop_code_map:
+    if stop_id_suffix_map:
         known = valid_stop_ids or (
             frozenset(stop_coordinate_index["stop_id"].astype(str).unique())
             if stop_coordinate_index is not None and not stop_coordinate_index.empty
             else frozenset()
         )
-        _suffix_map    = stop_id_suffix_map or {}
-        _stop_code_map = stop_code_map or {}
 
         def _normalise_id(sid: str) -> str:
             if sid in known:
                 return sid
-            # Try NaPTAN stop_code field first (exact match)
-            resolved = _stop_code_map.get(sid)
+            resolved = stop_id_suffix_map.get(sid)
             if resolved:
-                logger.info("Normalised NaPTAN stop_code '%s' → '%s'.", sid, resolved)
-                return resolved
-            # Fall back to trailing-digit suffix match
-            resolved = _suffix_map.get(sid)
-            if resolved:
-                logger.info("Normalised stop_id suffix '%s' → '%s'.", sid, resolved)
+                logger.info("Normalised stop_id '%s' → '%s'.", sid, resolved)
                 return resolved
             return sid
 
@@ -186,7 +270,7 @@ def _clean_arrival_time(time_val):
     # ------------------------------------------------------------------
     # Step 6 — Validate stop IDs against the GTFS feed
     #
-    # The GTFS feed is the authoritative set of stops. All submitted
+    # The GTFS feed is the authoritative set of NTA stops. All submitted
     # stop IDs must exist in it — no new stops are created by this tool.
     #
     # valid_stop_ids (preferred): complete unfiltered stop set read
@@ -207,7 +291,7 @@ def _clean_arrival_time(time_val):
         unknown_stop_ids = sorted(submitted_ids - gtfs_stop_ids)
 
         if unknown_stop_ids:
-            # Non-fatal: the GTFS snapshot may not cover all active stops
+            # Non-fatal: the GTFS snapshot may not cover all active NTA stops
             # (e.g. recently added stops, regional gaps, or feed date filtering).
             # Warn clearly so the issue is visible in logs and results, but allow
             # the analysis to continue — timing and frequency checks still run;
@@ -216,7 +300,7 @@ def _clean_arrival_time(time_val):
                 "GTFS STOP VALIDATION: %d stop ID(s) not found in GTFS feed: %s. "
                 "Corridor detection will be skipped for these stops. "
                 "Timing and frequency analysis will proceed normally. "
-                "Verify these are valid GTFS stop codes or update the GTFS feed.",
+                "Verify these are valid NTA stop codes or update the GTFS feed.",
                 len(unknown_stop_ids),
                 unknown_stop_ids,
             )
@@ -592,7 +676,7 @@ def _resolve_coordinates(
         logger.warning(
             "Coordinates not found in GTFS index for %d stop_id(s): %s. "
             "Corridor detection will be skipped for these stops. "
-            "Verify these are valid GTFS stop codes, or supply a GTFS feed "
+            "Verify these are valid NTA stop codes, or supply a GTFS feed "
             "that covers the submitted route.",
             len(unresolved),
             unresolved,

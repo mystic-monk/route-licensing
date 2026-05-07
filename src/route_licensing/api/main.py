@@ -1,7 +1,25 @@
 """
 Route Licensing — FastAPI Application
+======================================
+Serves both a JSON API and a Jinja2 HTML UI.
+
+HTML endpoints:
+  GET  /                              → Dashboard (upload form + recent history)
+  GET  /history                       → Full analysis history
+  GET  /results/{ref_id}              → Analysis results page
+  GET  /results/{ref_id}/timetable    → Submitted timetable + GTFS comparison
+
+JSON API endpoints:
+  POST /api/v1/analyze                → Upload Excel, run engine, return JSON
+  GET  /api/v1/results                → List all analyses
+  GET  /api/v1/results/{ref_id}       → Full detail for one analysis
+  DELETE /api/v1/results/{ref_id}     → Delete a stored analysis
+  GET  /api/v1/powerbi/export         → Flattened CSV or JSON for Power BI
+  GET  /api/v1/status                 → GTFS feed health check
 """
 
+import json
+import logging
 import os
 import shutil
 import tempfile
@@ -15,31 +33,26 @@ import requests as http_requests
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from starlette.background import BackgroundTask
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 
 from route_licensing.core.config import Config
-from route_licensing.ingestion.gtfs_static_loader import load_gtfs, build_stop_service_index
-import os
-import shutil
-import logging
-import tempfile
-from pathlib import Path
-from typing import Optional
-
-import pandas as pd
-from fastapi import FastAPI, UploadFile, File, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse, RedirectResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-
-from route_licensing.core.config import Config
-from route_licensing.ingestion.gtfs_static_loader import load_static_gtfs
+from route_licensing.engine.decision_engine import analyse_route
+from route_licensing.engine.storage import (
+    delete_analysis,
+    get_analysis_by_ref,
+    list_all_analyses,
+    save_analysis_result,
+)
+from route_licensing.ingestion.gtfs_static_loader import (
+    build_stop_service_index,
+    build_trip_index,
+    load_all_stop_ids,
+    load_gtfs,
+)
 from route_licensing.ingestion.request_parser import parse_excel_request
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -49,12 +62,114 @@ _HERE         = Path(__file__).parent
 TEMPLATES_DIR = _HERE / "templates"
 STATIC_DIR    = _HERE / "static"
 
-# ── App Initialisation ────────────────────────────────────────────────────────
-app = FastAPI(
-    title="NTA Route Licensing API",
-    description="Deterministic Decision Support System for Bus Service Licensing in Ireland",
-    version="1.0.0",
-)
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+cfg = Config()
+
+_GTFS_STATIC_URL   = "https://www.transportforireland.ie/transitData/Data/GTFS_Realtime.zip"
+_GTFS_MAX_AGE_DAYS = 7
+
+_gtfs_index: pd.DataFrame = pd.DataFrame()
+_CACHE_BUST: str = str(int(datetime.now(timezone.utc).timestamp()))
+_gtfs_trip_index: pd.DataFrame = pd.DataFrame()
+_gtfs_service_date: Optional[date] = None
+_gtfs_all_stop_ids: frozenset = frozenset()
+_gtfs_stop_id_suffix_map: dict = {}
+_gtfs_stop_code_map: dict = {}
+
+
+# ---------------------------------------------------------------------------
+# Lifespan
+# ---------------------------------------------------------------------------
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _load_gtfs_index()
+    yield
+
+
+def _load_gtfs_index() -> None:
+    global _gtfs_index, _gtfs_trip_index, _gtfs_all_stop_ids, _gtfs_stop_id_suffix_map, _gtfs_service_date
+
+    gtfs_path = cfg.static_gtfs_path
+    _download_gtfs_if_needed(gtfs_path)
+
+    if not os.path.exists(gtfs_path):
+        logger.critical(
+            "GTFS feed not found at '%s' and could not be downloaded automatically. "
+            "Download the feed manually from: %s",
+            gtfs_path,
+            _GTFS_STATIC_URL,
+        )
+        return
+
+    try:
+        logger.info("Loading GTFS feed from %s ...", gtfs_path)
+        feed, _gtfs_service_date = load_gtfs(gtfs_path)
+        _gtfs_index        = build_stop_service_index(feed)
+        _gtfs_trip_index   = build_trip_index(feed)
+        _gtfs_all_stop_ids, _gtfs_stop_id_suffix_map = load_all_stop_ids(gtfs_path)
+        logger.info(
+            "GTFS feed loaded: %d stop-service records, %d routes, %d unique stops.",
+            len(_gtfs_index),
+            _gtfs_index["route_id"].nunique(),
+            _gtfs_index["stop_id"].nunique(),
+        )
+    except Exception as exc:
+        logger.critical(
+            "GTFS feed at '%s' could not be loaded: %s. "
+            "Check the file is a valid GTFS zip and restart the server.",
+            gtfs_path,
+            exc,
+        )
+
+
+def _download_gtfs_if_needed(local_path: str) -> None:
+    should_download = True
+
+    if os.path.exists(local_path):
+        age_days = (
+            datetime.now(timezone.utc)
+            - datetime.fromtimestamp(
+                os.path.getmtime(local_path), tz=timezone.utc
+            )
+        ).days
+        if age_days < _GTFS_MAX_AGE_DAYS:
+            logger.info(
+                "GTFS feed is %d day(s) old — reusing without re-downloading.",
+                age_days,
+            )
+            should_download = False
+
+    if not should_download:
+        return
+
+    try:
+        logger.info("Downloading GTFS static feed from %s ...", _GTFS_STATIC_URL)
+        os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
+        response = http_requests.get(_GTFS_STATIC_URL, timeout=120, stream=True)
+        response.raise_for_status()
+        with open(local_path, "wb") as f:
+            for chunk in response.iter_content(chunk_size=1024 * 1024):
+                f.write(chunk)
+        logger.info("GTFS static feed downloaded to %s.", local_path)
+    except Exception as exc:
+        logger.warning(
+            "Could not download GTFS static feed: %s. "
+            "Place the file manually at '%s' and restart the server.",
+            exc,
+            local_path,
+        )
+
+
+def _gtfs_is_ready() -> bool:
+    return not _gtfs_index.empty
+
+
+# ---------------------------------------------------------------------------
+# FastAPI app
+# ---------------------------------------------------------------------------
 
 app = FastAPI(
     title="Route Licensing API",
@@ -63,7 +178,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Enable CORS for UI integration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -1115,85 +1229,6 @@ async def run_analysis(
                 os.remove(tmp_path)
             except OSError:
                 pass
-
-
-# ── Global State: load GTFS once at startup ───────────────────────────────────
-cfg = Config()
-_gtfs_index: pd.DataFrame = pd.DataFrame()
-_gtfs_mode: str = "demo"
-
-
-@app.on_event("startup")
-def load_gtfs_on_startup() -> None:
-    """Load the GTFS static feed at startup, with fallback to demo data."""
-    global _gtfs_index, _gtfs_mode
-
-    gtfs_path = cfg.static_gtfs_path
-    if os.path.exists(gtfs_path):
-        try:
-            logger.info(f"Loading GTFS feed from {gtfs_path}...")
-            feed = load_gtfs(gtfs_path)
-            _gtfs_index = build_stop_service_index(feed)
-            _gtfs_mode = "live"
-            logger.info(f"Loaded {len(_gtfs_index)} stop-service records from GTFS.")
-            return
-        except Exception as exc:
-            logger.warning(f"GTFS load failed ({exc}). Falling back to demo data.")
-
-    # Fallback: synthetic Dublin demo data
-    logger.info("No GTFS feed found — using synthetic demo data.")
-    from route_licensing.ingestion.demo_data import build_demo_index
-    _gtfs_index = build_demo_index()
-    _gtfs_mode = "demo"
-    logger.info(f"Demo index built: {len(_gtfs_index)} stop-service records.")
-
-
-def _compile_considered_routes(stop_analysis: list) -> list:
-    """
-    Aggregate across all stops which existing routes were flagged
-    (via timing conflict or corridor overlap) and for which stops.
-    Returns a deduplicated list of dicts for the UI summary table.
-    """
-    route_map: dict = {}
-
-    for stop in stop_analysis:
-        stop_name = stop["stop_name"]
-
-        # Timing conflicts
-        for cs in stop.get("conflicting_services", []):
-            rid = cs["route_id"]
-            if rid not in route_map:
-                route_map[rid] = {
-                    "route_id": rid,
-                    "operator": cs.get("operator", ""),
-                    "affected_stops": set(),
-                    "conflict_types": set(),
-                }
-            route_map[rid]["affected_stops"].add(stop_name)
-            route_map[rid]["conflict_types"].add("timing")
-
-        # Corridor overlaps
-        for rid in stop.get("corridor_overlap", []):
-            if rid not in route_map:
-                route_map[rid] = {
-                    "route_id": rid,
-                    "operator": "",
-                    "affected_stops": set(),
-                    "conflict_types": set(),
-                }
-            route_map[rid]["affected_stops"].add(stop_name)
-            route_map[rid]["conflict_types"].add("corridor")
-
-    # Convert sets to sorted lists for JSON / template serialisation
-    result = []
-    for entry in sorted(route_map.values(), key=lambda x: x["route_id"]):
-        result.append({
-            "route_id":      entry["route_id"],
-            "operator":      entry["operator"],
-            "affected_stops": sorted(entry["affected_stops"]),
-            "conflict_types": sorted(entry["conflict_types"]),
-        })
-    return result
 
 
 # ══════════════════════════════════════════════════════════════════════════════
