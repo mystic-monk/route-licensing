@@ -1016,9 +1016,9 @@ async def gtfs_stops_page(
         if search:
             # Also match against stop_code (NaPTAN short code) if a reverse map exists.
             stop_ids_matching_code: set = set()
-            if _gtfs_stop_id_to_code_map:
+            if _gtfs_stop_code_map:
                 stop_ids_matching_code = {
-                    sid for sid, code in _gtfs_stop_id_to_code_map.items()
+                    sid for sid, code in _gtfs_stop_code_map.items()
                     if search.lower() in code.lower()
                 }
             mask = (
@@ -1058,7 +1058,7 @@ async def gtfs_stops_page(
 
         stop_agg["first_dep"] = stop_agg["first_dep"].apply(_fmt_td)
         stop_agg["last_dep"]  = stop_agg["last_dep"].apply(_fmt_td)
-        stop_agg["stop_code"] = stop_agg["stop_id"].map(_gtfs_stop_id_to_code_map).fillna("")
+        stop_agg["stop_code"] = stop_agg["stop_id"].map(_gtfs_stop_code_map).fillna("")
 
         total       = len(stop_agg)
         total_pages = max(1, (total + per_page - 1) // per_page)
