@@ -1,54 +1,7 @@
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 061333f (bugfixes)
 """
 Route Licensing — FastAPI Application
-=========================================
-Serves both a JSON API and a Jinja2 HTML UI.
-
-<<<<<<< HEAD
-Endpoints:
-  GET  /              → HTML dashboard (upload + history)
-  GET  /history       → HTML history page
-  POST /api/v1/analyze → Upload Excel, run engine, return JSON
-  GET  /api/v1/results → JSON list of all analyses
-  GET  /api/v1/results/{ref_id} → JSON detail for one analysis
-  GET  /results/{ref_id}        → HTML results page
-  GET  /api/v1/powerbi/export   → Flattened CSV or JSON for Power BI
-=======
-HTML endpoints:
-  GET  /                              → Dashboard (upload form + recent history)
-  GET  /history                       → Full analysis history
-  GET  /results/{ref_id}              → Analysis results page
-  GET  /results/{ref_id}/timetable    → Submitted timetable + GTFS comparison
-
-JSON API endpoints:
-  POST /api/v1/analyze                → Upload Excel, run engine, return JSON
-  GET  /api/v1/results                → List all analyses
-  GET  /api/v1/results/{ref_id}       → Full detail for one analysis
-  DELETE /api/v1/results/{ref_id}     → Delete a stored analysis
-  GET  /api/v1/powerbi/export         → Flattened CSV or JSON for Power BI
-  GET  /api/v1/status                 → GTFS feed health check
-
-GTFS static feed
-----------------
-The application requires the GTFS static feed at the path configured
-in GTFS_STATIC_PATH (default: data/gtfs_ireland.zip).
-
-On startup the application attempts to download the feed automatically
-from the configured feed URL if the file is missing or older than 7 days:
-
-    https://www.transportforireland.ie/transitData/Data/GTFS_All.zip
-
-No API key is required for this download. If the auto-download fails,
-place the zip file manually and restart. The server starts without the
-feed but rejects all analysis submissions with HTTP 503 until the feed
-is available. Visit /api/v1/status to check readiness at any time.
->>>>>>> cf9beb7 (made more generic)
 """
 
-<<<<<<< HEAD
 import os
 import shutil
 import tempfile
@@ -68,9 +21,6 @@ from fastapi.templating import Jinja2Templates
 
 from route_licensing.core.config import Config
 from route_licensing.ingestion.gtfs_static_loader import load_gtfs, build_stop_service_index
-=======
-=======
->>>>>>> 061333f (bugfixes)
 import os
 import shutil
 import logging
@@ -86,18 +36,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from route_licensing.core.config import Config
-<<<<<<< HEAD
 from route_licensing.ingestion.gtfs_static_loader import load_static_gtfs
->>>>>>> 332e14b (first commit)
-=======
-from route_licensing.ingestion.gtfs_static_loader import load_gtfs, build_stop_service_index
->>>>>>> 061333f (bugfixes)
 from route_licensing.ingestion.request_parser import parse_excel_request
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 061333f (bugfixes)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -108,200 +49,13 @@ _HERE         = Path(__file__).parent
 TEMPLATES_DIR = _HERE / "templates"
 STATIC_DIR    = _HERE / "static"
 
-<<<<<<< HEAD
 # ── App Initialisation ────────────────────────────────────────────────────────
-<<<<<<< HEAD
 app = FastAPI(
     title="NTA Route Licensing API",
     description="Deterministic Decision Support System for Bus Service Licensing in Ireland",
     version="1.0.0",
 )
-=======
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-cfg = Config()
 
-# Public GTFS static feed URL — no API key required.
-_GTFS_STATIC_URL   = "https://www.transportforireland.ie/transitData/Data/GTFS_All.zip"
-# Re-download if the local file is older than this many days.
-_GTFS_MAX_AGE_DAYS = 7
-
-# ---------------------------------------------------------------------------
-# Application state
-# _gtfs_index is populated during lifespan startup and is read-only for
-# all request handlers. An empty DataFrame means the feed failed to load
-# and analysis submissions will be rejected with HTTP 503 until resolved.
-# ---------------------------------------------------------------------------
-_gtfs_index: pd.DataFrame = pd.DataFrame()
-# Cache-bust token — set once at startup so every browser reload of a new
-# server instance gets fresh JS/CSS, not a 304 from the previous run.
-_CACHE_BUST: str = str(int(datetime.now(timezone.utc).timestamp()))
-# Trip-structured index: one row per stop-visit per trip (trip_id preserved).
-# Used only for the GTFS Routes timetable display. Not deduplicated.
-_gtfs_trip_index: pd.DataFrame = pd.DataFrame()
-# The GTFS service date selected at load time (busiest date or explicit).
-_gtfs_service_date: Optional[date] = None
-# Complete set of stop_ids from stops.txt — no date filtering.
-# Used to validate submitted timetable stop IDs without rejecting stops
-# that exist in the network but don't run on the busiest service date.
-_gtfs_all_stop_ids: frozenset = frozenset()
-# Suffix → full stop_id lookup (e.g. '247191' → '8380B247191').
-# stop_code → full stop_id lookup (e.g. NaPTAN stop_code field values).
-# Used to normalise short/NaPTAN stop IDs submitted in timetable Excel files.
-_gtfs_stop_id_suffix_map: dict = {}
-_gtfs_stop_code_map: dict = {}
-# Reverse map: stop_id → stop_code (for display in the stops browser).
-_gtfs_stop_id_to_code_map: dict = {}
-# Demand index: (from_stop_id, to_stop_id, day_type, time_band) → pax/hour.
-# Populated from disk cache at startup; updated when a demand file is uploaded.
-_demand_index: dict = {}
-
-
-# ---------------------------------------------------------------------------
-# Lifespan
-# ---------------------------------------------------------------------------
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """
-    Runs once at startup. Attempts to download and load the GTFS
-    static feed. If the feed cannot be loaded the server starts and
-    serves the UI, but analysis submissions are blocked until the feed
-    is available.
-    """
-    _load_gtfs_index()
-    _load_demand_index()
-    yield
-
-
-def _load_demand_index() -> None:
-    """Loads demand data from the JSON disk cache if it exists."""
-    global _demand_index
-    cached = load_demand_from_cache()
-    if cached:
-        _demand_index = cached
-        logger.info("Demand index loaded from cache: %d records.", len(_demand_index))
-    _ensure_demand_template()
-
-
-def _ensure_demand_template() -> None:
-    """Generates the demand template Excel if it doesn't already exist."""
-    template_path = Path("data/demand/demand_template.xlsx")
-    if not template_path.exists():
-        try:
-            template_path.parent.mkdir(parents=True, exist_ok=True)
-            generate_demand_template(str(template_path))
-        except Exception as exc:
-            logger.warning("Could not generate demand template: %s", exc)
-
-
-def _load_gtfs_index() -> None:
-    """
-    Loads the GTFS static feed into the module-level _gtfs_index.
-
-    1. Downloads a fresh copy if the local file is missing or stale.
-    2. Loads and indexes the local zip file.
-
-    On any failure _gtfs_index remains an empty DataFrame and a CRITICAL
-    log entry is written so the problem is immediately visible in logs.
-    """
-    global _gtfs_index, _gtfs_trip_index, _gtfs_all_stop_ids, _gtfs_stop_id_suffix_map, _gtfs_stop_code_map, _gtfs_stop_id_to_code_map, _gtfs_service_date
-
-    gtfs_path = cfg.static_gtfs_path
-    _download_gtfs_if_needed(gtfs_path)
-
-    if not os.path.exists(gtfs_path):
-        logger.critical(
-            "GTFS feed not found at '%s' and could not be downloaded automatically. "
-            "Analysis submissions will be rejected until the feed is available. "
-            "Download the feed manually from: %s",
-            gtfs_path,
-            _GTFS_STATIC_URL,
-        )
-        return
-
-    try:
-        logger.info("Loading GTFS feed from %s ...", gtfs_path)
-        feed, _gtfs_service_date = load_gtfs(gtfs_path)
-        _gtfs_index        = build_stop_service_index(feed)
-        _gtfs_trip_index   = build_trip_index(feed)
-        _gtfs_all_stop_ids, _gtfs_stop_id_suffix_map, _gtfs_stop_code_map = load_all_stop_ids(gtfs_path)
-        _gtfs_stop_id_to_code_map = {v: k for k, v in _gtfs_stop_code_map.items()}
-        logger.info(
-            "GTFS feed loaded: %d stop-service records, %d routes, %d unique stops.",
-            len(_gtfs_index),
-            _gtfs_index["route_id"].nunique(),
-            _gtfs_index["stop_id"].nunique(),
-        )
-    except Exception as exc:
-        logger.critical(
-            "GTFS feed at '%s' could not be loaded: %s. "
-            "Check the file is a valid GTFS zip and restart the server.",
-            gtfs_path,
-            exc,
-        )
-
-
-def _download_gtfs_if_needed(local_path: str) -> None:
-    """
-    Downloads the GTFS static feed to local_path when the file is
-    missing or older than _GTFS_MAX_AGE_DAYS days.
-
-    Logs a warning and returns silently on any download failure.
-    """
-    should_download = True
-
-    if os.path.exists(local_path):
-        age_days = (
-            datetime.now(timezone.utc)
-            - datetime.fromtimestamp(
-                os.path.getmtime(local_path), tz=timezone.utc
-            )
-        ).days
-        if age_days < _GTFS_MAX_AGE_DAYS:
-            logger.info(
-                "GTFS feed is %d day(s) old — reusing without re-downloading.",
-                age_days,
-            )
-            should_download = False
-
-    if not should_download:
-        return
-
-    try:
-        logger.info("Downloading GTFS static feed from %s ...", _GTFS_STATIC_URL)
-        os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
-        response = http_requests.get(
-            _GTFS_STATIC_URL, timeout=120, stream=True
-        )
-        response.raise_for_status()
-        with open(local_path, "wb") as f:
-            for chunk in response.iter_content(chunk_size=1024 * 1024):
-                f.write(chunk)
-        logger.info("GTFS static feed downloaded to %s.", local_path)
-    except Exception as exc:
-        logger.warning(
-            "Could not download GTFS static feed: %s. "
-            "Place the file manually at '%s' and restart the server.",
-            exc,
-            local_path,
-        )
-
-
-def _gtfs_is_ready() -> bool:
-    """Returns True if the GTFS index is loaded and non-empty."""
-    return not _gtfs_index.empty
-
-
-# ---------------------------------------------------------------------------
-# FastAPI app
-# ---------------------------------------------------------------------------
->>>>>>> cf9beb7 (made more generic)
-
-=======
-=======
->>>>>>> 061333f (bugfixes)
 app = FastAPI(
     title="Route Licensing API",
     description="Deterministic rule-based decision support system for bus service licensing in Ireland.",
@@ -309,11 +63,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-<<<<<<< HEAD
 # Enable CORS for UI integration
->>>>>>> 332e14b (first commit)
-=======
->>>>>>> 061333f (bugfixes)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -321,8 +71,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-<<<<<<< HEAD
-<<<<<<< HEAD
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 templates.env.globals["cache_bust"] = _CACHE_BUST
@@ -1324,14 +1072,50 @@ async def run_analysis(
 
     tmp_path: Optional[str] = None
     try:
-        # 1. Write upload to temp file
-=======
-# Shared configuration and GTFS loader
-cfg = Config()
-=======
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
->>>>>>> 061333f (bugfixes)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+            shutil.copyfileobj(file.file, tmp)
+            tmp_path = tmp.name
+
+        try:
+            new_route_df = parse_excel_request(
+                tmp_path,
+                stop_coordinate_index=_gtfs_index,
+                operator=operator,
+                valid_stop_ids=_gtfs_all_stop_ids if _gtfs_all_stop_ids else None,
+                stop_id_suffix_map=_gtfs_stop_id_suffix_map if _gtfs_stop_id_suffix_map else None,
+            )
+        except (ValueError, RuntimeError) as exc:
+            logger.error("Excel parsing error: %s", exc, exc_info=True)
+            raise HTTPException(status_code=422, detail=f"Excel parsing error: {exc}")
+
+        if new_route_df.empty:
+            raise HTTPException(
+                status_code=422,
+                detail="No stop rows were found in the uploaded file.",
+            )
+
+        try:
+            analysis = analyse_route(new_route_df, _gtfs_index, submission_cfg)
+        except Exception as exc:
+            logger.exception("Decision engine error for file: %s", file.filename)
+            raise HTTPException(status_code=500, detail=f"Analysis engine error: {exc}")
+
+        save_analysis_result(analysis["route_id"], analysis, cfg.results_path)
+        logger.info(
+            "Analysis complete for '%s'. Verdict: %s.",
+            analysis["route_id"],
+            analysis["route_verdict"],
+        )
+
+        return JSONResponse(content=_sanitise_for_json(analysis))
+
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
 
 # ── Global State: load GTFS once at startup ───────────────────────────────────
 cfg = Config()
@@ -1467,86 +1251,6 @@ async def results_page(request: Request, ref_id: str):
     })
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# JSON API Endpoints
-# ══════════════════════════════════════════════════════════════════════════════
-
-@app.post("/api/v1/analyze", tags=["Analysis"], response_class=JSONResponse)
-async def run_analysis(file: UploadFile = File(...)):
-    """
-    Upload an Excel timetable proposal (.xlsx / .xls) and run the
-    deterministic licensing analysis against the loaded GTFS data.
-
-    Returns the full analysis result as JSON. The UI also uses this
-    endpoint — on success the JS redirects to /results/{route_id}.
-    """
-    if not file.filename.endswith((".xlsx", ".xls")):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid file format. Please upload an Excel file (.xlsx or .xls).",
-        )
-
-    tmp_path: Optional[str] = None
-    try:
-<<<<<<< HEAD
-        # 1. Save uploaded file to a temporary location
->>>>>>> 332e14b (first commit)
-=======
-        # 1. Write upload to temp file
->>>>>>> 061333f (bugfixes)
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-            shutil.copyfileobj(file.file, tmp)
-            tmp_path = tmp.name
-
-<<<<<<< HEAD
-<<<<<<< HEAD
-        # 2. Parse the proposal
-        try:
-            new_route_df = parse_excel_request(
-                tmp_path,
-                stop_coordinate_index=_gtfs_index,
-                operator=operator,
-                valid_stop_ids=_gtfs_all_stop_ids if _gtfs_all_stop_ids else None,
-                stop_id_suffix_map=_gtfs_stop_id_suffix_map if _gtfs_stop_id_suffix_map else None,
-                stop_code_map=_gtfs_stop_code_map if _gtfs_stop_code_map else None,
-            )
-        except (ValueError, RuntimeError) as exc:
-            logger.error("Excel parsing error: %s", exc, exc_info=True)
-            raise HTTPException(status_code=422, detail=f"Excel parsing error: {exc}")
-
-        if new_route_df.empty:
-            raise HTTPException(
-                status_code=422,
-                detail="No stop rows were found in the uploaded file.",
-            )
-
-        try:
-            analysis = analyse_route(
-                new_route_df, _gtfs_index, submission_cfg,
-                trip_index=_gtfs_trip_index,
-                demand_index=_demand_index if _demand_index else None,
-            )
-        except Exception as exc:
-            logger.exception("Decision engine error for file: %s", file.filename)
-            raise HTTPException(status_code=500, detail=f"Analysis engine error: {exc}")
-
-        save_analysis_result(analysis["route_id"], analysis, cfg.results_path)
-        logger.info(
-            "Analysis complete for '%s'. Verdict: %s.",
-            analysis["route_id"],
-            analysis["route_verdict"],
-        )
-
-        return JSONResponse(content=_sanitise_for_json(analysis))
-
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
-
-
 @app.get("/api/v1/results", tags=["Storage"])
 async def get_results():
     """List summary metadata for all stored analyses (JSON)."""
@@ -1675,120 +1379,3 @@ async def status():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("route_licensing.api.main:app", host="0.0.0.0", port=8000, reload=True)
-=======
-        # 2. Load Static GTFS
-        try:
-            gtfs = load_static_gtfs(cfg.static_gtfs_path)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"GTFS Load Error: {str(e)}")
-
-        # 3. Parse Request
-=======
-        # 2. Parse the proposal
->>>>>>> 061333f (bugfixes)
-        try:
-            new_route_df = parse_excel_request(tmp_path)
-        except Exception as exc:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Excel parsing error: {exc}. "
-                       "Expected columns: Route ID, Operator, Stop ID, Stop Name, Lat, Long, Arrival Time.",
-            )
-
-        if new_route_df.empty:
-            raise HTTPException(status_code=422, detail="No stops found in the uploaded file.")
-
-        # 3. Run the decision engine
-        try:
-            analysis = analyse_route(new_route_df, _gtfs_index, cfg)
-        except Exception as exc:
-            logger.exception("Decision engine error")
-            raise HTTPException(status_code=500, detail=f"Analysis engine error: {exc}")
-
-        # 4. Persist result
-        save_analysis_result(analysis["route_id"], analysis, cfg.results_path)
-
-        return JSONResponse(content=analysis)
-
-    finally:
-        if tmp_path and os.path.exists(tmp_path):
-            os.remove(tmp_path)
-
-
-@app.get("/api/v1/results", tags=["Storage"])
-async def get_results():
-    """List all historical analysis results (JSON)."""
-    return list_all_analyses(cfg.results_path)
-
-
-@app.get("/api/v1/results/{ref_id}", tags=["Storage"])
-async def get_result_detail(ref_id: str):
-    """Get full JSON detail for a specific analysis."""
-    data = get_analysis_by_ref(ref_id, cfg.results_path)
-    if not data:
-        raise HTTPException(status_code=404, detail=f"Analysis '{ref_id}' not found.")
-    return data
-
-
-@app.get("/api/v1/powerbi/export", tags=["Reporting"])
-async def export_for_powerbi(format: str = "json"):
-    """
-    Flattened data export optimised for Power BI.
-    Each row = one stop with route-level metadata attached.
-    Use ?format=csv to download a CSV file.
-    """
-    all_summaries = list_all_analyses(cfg.results_path)
-    flattened: list = []
-
-    for summary in all_summaries:
-        detail = get_analysis_by_ref(summary["ref_id"], cfg.results_path)
-        if not detail:
-            continue
-
-        route_meta = {
-            "route_id":             detail["route_id"],
-            "operator":             detail["operator"],
-            "route_verdict":        detail["route_verdict"],
-            "route_recommendation": detail["route_recommendation"],
-            "total_stops":          detail["total_stops"],
-            "red_stops_count":      detail["red_stops"],
-            "amber_stops_count":    detail["amber_stops"],
-            "green_stops_count":    detail["green_stops"],
-        }
-
-        for stop in detail.get("stop_analysis", []):
-            row = route_meta.copy()
-            row.update({
-                "stop_id":          stop["stop_id"],
-                "stop_name":        stop["stop_name"],
-                "arrival_time":     stop["arrival_time"],
-                "risk_score":       stop["risk_score"],
-                "stop_verdict":     stop["verdict"],
-                "avg_headway":      stop.get("avg_headway_minutes"),
-                "timing_conflict":  stop["timing_conflict"],
-                "frequency_verdict": stop.get("frequency_verdict"),
-            })
-            flattened.append(row)
-
-    if format.lower() == "csv":
-        df = pd.DataFrame(flattened)
-        csv_path = tempfile.mktemp(suffix=".csv")
-        df.to_csv(csv_path, index=False)
-        return FileResponse(
-            csv_path,
-            filename="nta_analysis_export.csv",
-            media_type="text/csv",
-        )
-
-    return flattened
-
-
-# ── Dev runner ─────────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    import uvicorn
-<<<<<<< HEAD
-    uvicorn.run(app, host="0.0.0.0", port=8000)
->>>>>>> 332e14b (first commit)
-=======
-    uvicorn.run("route_licensing.api.main:app", host="0.0.0.0", port=8000, reload=True)
->>>>>>> 061333f (bugfixes)

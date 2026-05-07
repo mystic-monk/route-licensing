@@ -1,110 +1,12 @@
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 061333f (bugfixes)
-=======
-"""
-request_parser.py
-=================
-Parses incoming route licensing proposals into the flat DataFrame
-format required by the analysis engine.
-
-Two entry points are provided:
-
-    parse_excel_request(file_path, stop_coordinate_index, operator)
-        Parses the wide-format timetable Excel submission.
-
-    parse_new_route_request(request_dict)
-        Parses a programmatic dict submission (API / test use).
-
-Excel format — what the file actually contains
------------------------------------------------
-The submitted Excel file is a wide-format timetable, not a flat table.
-A single sheet may contain multiple direction sections. Each section has:
-
-    Row 1  — Section title  e.g. "Kinsale to Cork City"
-    Row 2  — Header         "Stop Name | Stop Location | Stop ID | Monday - Sunday"
-    Row 3+ — Data rows      stop_name | stop_location | stop_id | time | time | ...
-
-The times are datetime.time objects (openpyxl) representing individual
-departures from that stop. Each departure is expanded into its own row
-in the output DataFrame so the engine can check each one independently.
-
-Missing fields and how they are resolved
------------------------------------------
-- route_id:
-    Derived from the first section title found in the sheet.
-    Both directions share the same route_id so the engine produces a
-    single aggregate verdict for the full route.
-
-- operator:
-    Not present in the file. Must be passed as a parameter by the
-    caller (e.g. from a form field in the upload UI). Defaults to
-    "Unknown" with a warning logged.
-
-- stop_lat / stop_lon:
-    Not present in the file. Resolved by looking up the stop_id
-    in stop_coordinate_index (the loaded GTFS static index).
-
-    If a stop_id cannot be found in the index, coordinates default to
-    None and a warning is logged. The timing conflict checker and
-    frequency scorer continue to work normally for those stops. The
-    corridor detector skips any stop whose coordinates are None, so
-    corridor overlap will not be assessed for unresolved stops.
-
-    This allows the application to run against the demo GTFS data even
-    when the submitted timetable contains stop IDs that are not present
-    in the demo index (e.g. Cork/Kinsale stops against Dublin demo data).
-
-Post-midnight services
-----------------------
-datetime.time(0, 20) is treated as 00:20:00 (20 minutes past midnight),
-not 24:20:00. This affects frequency scoring for late-evening stops.
-The licensing team should confirm the preferred treatment before production use.
-"""
-
-import json
-import logging
-import re
->>>>>>> cf9beb7 (made more generic)
 import uuid
 from datetime import time as dt_time
 from typing import Optional
 
 import openpyxl
 import pandas as pd
-<<<<<<< HEAD
 from typing import Dict
-=======
-
-logger = logging.getLogger(__name__)
-
-# ---------------------------------------------------------------------------
-# Required output columns — must match decision_engine.py expectations
-# ---------------------------------------------------------------------------
-_OUTPUT_COLUMNS: list[str] = [
-    "route_id",
-    "operator",
-    "section_idx",
-    "section_title",
-    "section_day_groups",
-    "trip_idx",
-    "stop_id",
-    "stop_name",
-    "stop_location",
-    "stop_lat",
-    "stop_lon",
-    "arrival_time",
-]
->>>>>>> f80c120 (changed the Stop-Level Analysis)
 
 
-<<<<<<< HEAD
-=======
->>>>>>> 332e14b (first commit)
-=======
->>>>>>> 061333f (bugfixes)
 def _clean_arrival_time(time_val):
     """
     Loads a wide-format timetable Excel file and returns a flat

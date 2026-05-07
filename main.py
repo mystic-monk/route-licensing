@@ -12,7 +12,7 @@ def main():
     gtfs_path = os.getenv("GTFS_STATIC_PATH", "data/gtfs_ireland.zip")
     request_xl = "Application Input Timetable.xlsx"
     
-    print(f"--- NTA Route Licensing Analysis System ---")
+    print("--- Route Licensing Analysis ---")
     
     # 1. Load Static GTFS
     if not os.path.exists(gtfs_path):

@@ -25,9 +25,10 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
-.xls
-.xlsx
-.zip
+# Excel files (data, templates) and lock files
+*.xls
+*.xlsx
+~$*
 *.zip
 # PyInstaller
 #   Usually these files are written by a python script from a template
@@ -161,8 +162,6 @@ env.bak/
 venv.bak/
 
 data/
-*.xls
-*.xlsx
 
 # Spyder project settings
 .spyderproject

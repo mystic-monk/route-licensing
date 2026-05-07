@@ -26,17 +26,11 @@ import json
 import logging
 import os
 from datetime import datetime
-<<<<<<< HEAD
-<<<<<<< HEAD
 from typing import Dict, Any, Optional, List
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_RESULTS_DIR = "data/analysis_results"
-
-
-def _ensure_dir(results_dir: str) -> str:
-    if not os.path.exists(results_dir):
-        os.makedirs(results_dir, exist_ok=True)
-    return results_dir
 
 
 def save_analysis_result(
@@ -50,41 +44,9 @@ def save_analysis_result(
     _ensure_dir(results_dir)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{ref_id}_{timestamp}.json"
+    safe_ref = _safe_filename_part(ref_id)
+    filename = f"{safe_ref}_{timestamp}.json"
     filepath = os.path.join(results_dir, filename)
-=======
-from typing import Dict, Any
-=======
-from typing import Dict, Any, Optional, List
->>>>>>> 061333f (bugfixes)
-
-DEFAULT_RESULTS_DIR = "data/analysis_results"
-
-
-def _ensure_dir(results_dir: str) -> str:
-    if not os.path.exists(results_dir):
-        os.makedirs(results_dir, exist_ok=True)
-    return results_dir
-
-
-def save_analysis_result(
-    ref_id: str,
-    analysis: Dict[str, Any],
-    results_dir: str = DEFAULT_RESULTS_DIR,
-) -> str:
-    """
-    Saves the analysis result as a JSON file with timestamp.
-    """
-    _ensure_dir(results_dir)
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{ref_id}_{timestamp}.json"
-<<<<<<< HEAD
-    filepath = os.path.join(RESULTS_DIR, filename)
->>>>>>> 332e14b (first commit)
-=======
-    filepath = os.path.join(results_dir, filename)
->>>>>>> 061333f (bugfixes)
 
     try:
         with open(filepath, "w", encoding="utf-8") as f:
@@ -97,16 +59,11 @@ def save_analysis_result(
     logger.info("Analysis result saved: %s", filepath)
     return filepath
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 061333f (bugfixes)
 
 def get_analysis_by_ref(
     ref_id: str,
     results_dir: str = DEFAULT_RESULTS_DIR,
 ) -> Optional[Dict]:
-<<<<<<< HEAD
     """
     Retrieves the most recent analysis for a given route_id.
 
@@ -171,67 +128,25 @@ def list_all_analyses(
         if data is None:
             continue
 
-=======
-def get_analysis_by_ref(ref_id: str):
-=======
->>>>>>> 061333f (bugfixes)
-    """
-    Retrieves a specific analysis by its ref_id (latest version).
-    """
-    if not os.path.exists(results_dir):
-        return None
+        results.append({
+            "ref_id":          data.get("route_id", ""),
+            "operator":        data.get("operator", ""),
+            "verdict":         data.get("route_verdict", ""),
+            "total_stops":     data.get("total_stops", 0),
+            "red_stops":       data.get("red_stops", 0),
+            "amber_stops":     data.get("amber_stops", 0),
+            "green_stops":     data.get("green_stops", 0),
+            "recommendation":  data.get("route_recommendation", ""),
+            # Authoritative timestamp from inside the JSON, not the filename.
+            "timestamp":       data.get("analysed_at", ""),
+        })
 
-    files = [
-        f for f in os.listdir(results_dir)
-        if f.startswith(f"{ref_id}_") and f.endswith(".json")
-    ]
-    if not files:
-        return None
+    # Sort by analysed_at descending. Files without a timestamp sort last.
+    results.sort(
+        key=lambda r: r["timestamp"] or "",
+        reverse=True,
+    )
 
-    files.sort(reverse=True)
-    filepath = os.path.join(results_dir, files[0])
-
-    with open(filepath, "r") as f:
-        return json.load(f)
-
-
-def list_all_analyses(
-    results_dir: str = DEFAULT_RESULTS_DIR,
-) -> List[Dict]:
-    """
-    Returns metadata for all stored analyses.
-    """
-    if not os.path.exists(results_dir):
-        return []
-
-    results = []
-    for filename in sorted(os.listdir(results_dir), reverse=True):
-        if not filename.endswith(".json"):
-            continue
-        filepath = os.path.join(results_dir, filename)
-        try:
-            with open(filepath, "r") as f:
-                data = json.load(f)
-                parts = filename.replace(".json", "").split("_")
-                timestamp_str = parts[-2] + "_" + parts[-1] if len(parts) >= 2 else ""
-                results.append({
-                    "ref_id": data.get("route_id", ""),
-                    "operator": data.get("operator", ""),
-                    "verdict": data.get("route_verdict", ""),
-                    "total_stops": data.get("total_stops", 0),
-                    "red_stops": data.get("red_stops", 0),
-                    "amber_stops": data.get("amber_stops", 0),
-                    "green_stops": data.get("green_stops", 0),
-                    "recommendation": data.get("route_recommendation", ""),
-                    "timestamp": timestamp_str,
-                })
-<<<<<<< HEAD
->>>>>>> 332e14b (first commit)
-=======
-        except (json.JSONDecodeError, KeyError):
-            continue
-
->>>>>>> 061333f (bugfixes)
     return results
 
 

@@ -36,26 +36,12 @@ class Config:
     crs_geographic:         str   = "EPSG:4326"
 
     # Load from environment, never from source code
-<<<<<<< HEAD
     nta_api_key: str = field(
         default_factory=lambda: os.getenv("NTA_GTFSR_API_KEY", "")
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> 061333f (bugfixes)
-=======
-    gtfsr_api_key: str = field(
-        default_factory=lambda: os.getenv("NTA_GTFSR_API_KEY", os.getenv("GTFSR_API_KEY", ""))
->>>>>>> cf9beb7 (made more generic)
     )
     static_gtfs_path: str = field(
         default_factory=lambda: os.getenv("GTFS_STATIC_PATH", "data/gtfs_ireland.zip")
     )
     results_path: str = field(
         default_factory=lambda: os.getenv("RESULTS_PATH", "data/analysis_results")
-<<<<<<< HEAD
-=======
->>>>>>> 332e14b (first commit)
-=======
->>>>>>> 061333f (bugfixes)
     )
