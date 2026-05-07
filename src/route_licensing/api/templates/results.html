@@ -696,110 +696,13 @@
                             </tr>
                             {% endif %}
                             {% endfor %}
-                            {% if stop.conflicting_services|length > 2 %}
-                                <div style="color:var(--text-muted);">+{{ stop.conflicting_services|length - 2 }} more</div>
-                            {% endif %}
-                        </td>
-                    </tr>
-
-                    <!-- Expandable detail row -->
-                    <tr class="detail-row" id="detail-{{ row_idx }}">
-                        <td colspan="10">
-                            <div class="detail-content">
-
-<<<<<<< HEAD
-                                <!-- Timing Conflicts -->
-                                <div class="detail-section-title">⏱ Existing Services at This Stop (Timing Analysis)</div>
-                                {% if stop.conflicting_services and stop.conflicting_services|length > 0 %}
-                                <table class="mini-table">
-                                    <thead>
-                                        <tr>
-                                            <th>Route ID</th>
-                                            <th>Operator</th>
-                                            <th>Existing Arrival Time</th>
-                                            <th>Δ Minutes from Proposed</th>
-                                            <th>Conflict?</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                    {% for cs in stop.conflicting_services %}
-                                        <tr>
-                                            <td><strong>{{ cs.route_id }}</strong></td>
-                                            <td>{{ cs.operator }}</td>
-                                            <td>{{ cs.arrival_time }}</td>
-                                            <td>
-                                                <span style="color: {% if cs.delta_minutes <= 10 %}var(--verdict-red){% else %}var(--verdict-amber){% endif %};">
-<<<<<<< HEAD
-                                                    {{ "%.1f"|format(cs.delta_minutes) }} min
-=======
-                                                    {{ cs.delta_minutes | round(1) }} min
->>>>>>> 061333f (bugfixes)
-                                                </span>
-                                            </td>
-                                            <td>
-                                                {% if cs.delta_minutes <= 10 %}
-                                                    <span class="badge badge-red">Yes — within window</span>
-                                                {% else %}
-                                                    <span class="badge badge-amber">Near miss</span>
-                                                {% endif %}
-                                            </td>
-                                        </tr>
-                                    {% endfor %}
-                                    </tbody>
-                                </table>
-                                {% else %}
-                                    <p class="no-data">No existing services at this stop within the timing window.</p>
-                                {% endif %}
-
-                                <!-- Corridor Overlap -->
-                                <div class="detail-section-title">🗺 Corridor Overlap (Geographic Analysis)</div>
-                                {% if stop.corridor_overlap and stop.corridor_overlap|length > 0 %}
-                                    <p style="font-size:0.85rem; color: var(--text-secondary);">
-                                        This stop falls within <strong>{{ stop.corridor_overlap|length }}</strong> existing service corridor(s):
-                                        {% for route in stop.corridor_overlap %}
-                                            <span class="badge badge-amber" style="margin-left:4px;">{{ route }}</span>
-                                        {% endfor %}
-                                    </p>
-                                {% else %}
-                                    <p class="no-data">No geographic corridor overlap detected for this stop.</p>
-                                {% endif %}
-
-                                <!-- Frequency Detail -->
-                                <div class="detail-section-title">📊 Frequency Analysis</div>
-                                <p style="font-size:0.85rem; color: var(--text-secondary);">
-                                    {% if stop.avg_headway_minutes %}
-                                        Average headway at this stop: <strong>{{ stop.avg_headway_minutes }} minutes</strong>.
-                                        Verdict: <strong>{{ stop.frequency_verdict | replace('_', ' ') | title }}</strong>.
-                                    {% else %}
-                                        No existing services at this stop — classified as <strong>underserved</strong>.
-                                    {% endif %}
-                                </p>
-
-                                <!-- Decision Rationale -->
-                                <div class="detail-section-title">📋 Decision Rationale</div>
-                                <p style="font-size:0.85rem; color: var(--text-secondary);">
-                                    {{ stop.recommendation }}
-                                </p>
-
-                            </div>
                         </td>
                     </tr>
                 {% endfor %}
             </div>
-            {% endif %}
         </div>
-        {% endfor %}
     </div>
-    {% else %}
-    <div class="card empty-state" style="padding:40px;">
-        <div class="icon">🗺</div>
-        <h3>No existing routes share these stops</h3>
-        <p>None of the proposed stops were found in the loaded GTFS feed.</p>
-    </div>
-    {% endif %}
-=======
     </details>
->>>>>>> d2d039a (on the journey level)
 
 </div>
 
