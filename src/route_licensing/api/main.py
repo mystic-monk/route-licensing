@@ -18,6 +18,7 @@ JSON API endpoints:
   GET  /api/v1/status                 → GTFS feed health check
 """
 
+import gc
 import json
 import logging
 import os
@@ -164,6 +165,10 @@ def _load_gtfs_from_disk() -> bool:
         feed, _gtfs_service_date = load_gtfs(gtfs_path)
         _gtfs_index      = build_stop_service_index(feed)
         _gtfs_trip_index = build_trip_index(feed)
+        # Release the partridge feed and all large intermediate DataFrames it
+        # holds (stop_times, trips, routes, stops) before loading stop IDs.
+        del feed
+        gc.collect()
         _gtfs_all_stop_ids, _gtfs_stop_id_suffix_map, _gtfs_stop_code_map = load_all_stop_ids(gtfs_path)
         _gtfs_stop_id_to_code_map = {v: k for k, v in _gtfs_stop_code_map.items()}
         logger.info(

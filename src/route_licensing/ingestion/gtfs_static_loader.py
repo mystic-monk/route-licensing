@@ -33,6 +33,7 @@ Design decisions that carry policy significance
   distort frequency calculations.
 """
 
+import gc
 import logging
 from datetime import date
 from typing import Optional, Tuple
@@ -379,6 +380,8 @@ def build_stop_service_index(feed: ptg.gtfs.Feed) -> pd.DataFrame:
     # ------------------------------------------------------------------
     _assert_output_columns(index)
 
+    index = index.reset_index(drop=True)
+
     logger.info(
         "Stop-service index built: %d records, %d unique stops, %d unique routes.",
         len(index),
@@ -386,7 +389,7 @@ def build_stop_service_index(feed: ptg.gtfs.Feed) -> pd.DataFrame:
         index["route_id"].nunique(),
     )
 
-    return index.reset_index(drop=True)
+    return _apply_memory_opts(index)
 
 
 def build_trip_index(feed: ptg.gtfs.Feed) -> pd.DataFrame:
@@ -485,6 +488,8 @@ def build_trip_index(feed: ptg.gtfs.Feed) -> pd.DataFrame:
     else:
         merged["stop_sequence"] = 0
 
+    merged = merged.reset_index(drop=True)
+
     logger.info(
         "Trip index built: %d rows, %d trips, %d routes, %d unique stops.",
         len(merged),
@@ -492,12 +497,35 @@ def build_trip_index(feed: ptg.gtfs.Feed) -> pd.DataFrame:
         merged["route_id"].nunique(),
         merged["stop_id"].nunique(),
     )
-    return merged.reset_index(drop=True)
+
+    return _apply_memory_opts(merged)
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+def _apply_memory_opts(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Reduce in-memory footprint of a GTFS DataFrame without changing semantics.
+
+    - Object (string) columns → pd.Categorical.  High-cardinality repeated
+      values (stop_id, route_id, trip_id) go from ~80 bytes/row to ~4 bytes/row
+      plus a single shared string pool per column.  All pandas operations
+      (==, isin, groupby, str accessor) work identically on categorical.
+    - stop_lat / stop_lon → float32.  ±5 m resolution is far more than needed
+      for 300 m corridor detection; halves coordinate storage.
+    - stop_sequence → int32.
+    """
+    for col in df.select_dtypes(include="object").columns:
+        df[col] = df[col].astype("category")
+    for col in ("stop_lat", "stop_lon"):
+        if col in df.columns:
+            df[col] = df[col].astype("float32")
+    if "stop_sequence" in df.columns:
+        df["stop_sequence"] = df["stop_sequence"].astype("int32")
+    return df
+
 
 def _assert_not_empty(df: pd.DataFrame, table_name: str) -> None:
     """Raises RuntimeError if a required GTFS table is empty."""
