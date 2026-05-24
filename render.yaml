@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: route-licensing
+    runtime: python
+    pythonVersion: "3.11"
+    plan: standard           # GTFS Ireland feed loads ~500 MB into RAM; starter (512 MB) is too small
+    buildCommand: pip install -e .
+    startCommand: uvicorn route_licensing.api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/v1/status
+
+    # NOTE: Render's filesystem is ephemeral. GTFS data and analysis results are
+    # re-created at startup / on demand. Add a Render Disk ($0.25/GB/month) and
+    # set GTFS_STATIC_PATH / RESULTS_PATH to its mount path for persistence.
+    envVars:
+      - key: GTFS_STATIC_PATH
+        value: data/gtfs_ireland.zip
+      - key: RESULTS_PATH
+        value: data/analysis_results
+      - key: NTA_GTFSR_API_KEY
+        sync: false           # set in Render dashboard; leave blank if not using GTFS-RT
