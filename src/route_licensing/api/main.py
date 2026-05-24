@@ -52,7 +52,7 @@ from route_licensing.ingestion.gtfs_static_loader import (
     load_all_stop_ids,
     load_gtfs,
 )
-from route_licensing.ingestion.request_parser import parse_excel_request
+from route_licensing.ingestion.request_parser import parse_excel_request, generate_timetable_template
 from route_licensing.ingestion.demand_loader import (
     DemandIndex,
     generate_demand_template,
@@ -116,6 +116,7 @@ async def lifespan(app: FastAPI):
         t.start()
         logger.info("Background GTFS refresh started (age=%s days).", age_days)
     _load_demand_cache()
+    _ensure_timetable_template()
     yield
 
 
@@ -137,6 +138,17 @@ def _ensure_demand_template() -> None:
             logger.info("Demand template generated at %s.", path)
         except Exception as exc:
             logger.warning("Could not generate demand template: %s", exc)
+
+
+def _ensure_timetable_template() -> None:
+    path = STATIC_DIR / "timetable_template.xlsx"
+    if not path.exists():
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            generate_timetable_template(str(path))
+            logger.info("Timetable template generated at %s.", path)
+        except Exception as exc:
+            logger.warning("Could not generate timetable template: %s", exc)
 
 
 
@@ -421,10 +433,12 @@ def _build_gtfs_comparison(stop_analysis: list) -> list:
 
 @app.get("/download/timetable-template", include_in_schema=False)
 async def download_timetable_template():
-    """Download the pre-built Excel submission template."""
+    """Download the Excel submission template (generated on demand if absent)."""
     template_path = STATIC_DIR / "timetable_template.xlsx"
     if not template_path.exists():
-        raise HTTPException(status_code=404, detail="Template file not found.")
+        _ensure_timetable_template()
+    if not template_path.exists():
+        raise HTTPException(status_code=404, detail="Template file could not be generated.")
     return FileResponse(
         path=str(template_path),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1274,6 +1288,9 @@ async def run_analysis(
             logger.exception("Decision engine error for file: %s", file.filename)
             raise HTTPException(status_code=500, detail=f"Analysis engine error: {exc}")
 
+        # Sanitise NaN/Inf floats to None before saving so stored JSON is
+        # always valid and the UI never renders "nan min" or similar.
+        analysis = _sanitise_for_json(analysis)
         save_analysis_result(analysis["route_id"], analysis, cfg.results_path)
         logger.info(
             "Analysis complete for '%s'. Verdict: %s.",
@@ -1281,7 +1298,7 @@ async def run_analysis(
             analysis["route_verdict"],
         )
 
-        return JSONResponse(content=_sanitise_for_json(analysis))
+        return JSONResponse(content=analysis)
 
     finally:
         if tmp_path and os.path.exists(tmp_path):

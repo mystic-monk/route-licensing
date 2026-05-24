@@ -635,7 +635,8 @@
                                     {% endif %}
                                 </td>
                                 <td style="text-align:center; color:var(--text-secondary); font-size:0.8rem;">
-                                    {% if stop.avg_headway_minutes %}{{ stop.avg_headway_minutes }} min{% else %}—{% endif %}
+                                    {% set hw = stop.avg_headway_minutes %}
+                                    {% if hw is not none and hw|string not in ('nan', 'NaN') %}{{ hw }} min{% else %}—{% endif %}
                                 </td>
                                 <td>
                                     {% set fv = stop.frequency_verdict %}
@@ -679,7 +680,9 @@
                                                 <tr>
                                                     <td style="padding:2px 8px; font-weight:600;">
                                                         {{ svc.route_label if svc.route_label else svc.route_id }}
+                                                        {% if svc.route_id and svc.route_id != svc.route_label %}
                                                         <span style="font-family:monospace; font-size:0.68rem; color:var(--text-muted); display:block;">{{ svc.route_id }}</span>
+                                                        {% endif %}
                                                     </td>
                                                     <td style="padding:2px 8px;">{{ svc.operator }}</td>
                                                     <td style="padding:2px 8px; font-family:monospace;">{{ svc.arrival_time[:5] if svc.arrival_time|length >= 5 else svc.arrival_time }}</td>

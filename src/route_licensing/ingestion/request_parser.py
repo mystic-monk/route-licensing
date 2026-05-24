@@ -70,6 +70,8 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
+_TIME_STR_RE = re.compile(r"^\d{1,2}:\d{2}(:\d{2})?$")
+
 # ---------------------------------------------------------------------------
 # Required output columns — must match decision_engine.py expectations
 # ---------------------------------------------------------------------------
@@ -572,7 +574,10 @@ def _extract_stop_row(row: tuple) -> Optional[dict]:
 
     departure_times = [
         v for v in row_list[start + 3:]
-        if v is not None and isinstance(v, dt_time)
+        if v is not None and (
+            isinstance(v, dt_time) or
+            (isinstance(v, str) and _TIME_STR_RE.match(v.strip()))
+        )
     ]
 
     if not departure_times:
@@ -701,3 +706,122 @@ def _sanitise_route_id(title: str) -> str:
     sanitised = re.sub(r"[^\w\s-]", "", title).strip()
     sanitised = re.sub(r"\s+", "-", sanitised)
     return sanitised or f"NR-{uuid.uuid4().hex[:8]}"
+
+
+# ---------------------------------------------------------------------------
+# Template generation
+# ---------------------------------------------------------------------------
+
+def generate_timetable_template(output_path: str) -> None:
+    """
+    Writes the NTA timetable submission template to output_path.
+
+    The file is generated programmatically so it is guaranteed to match
+    the format that parse_excel_request expects:
+      - Sheet 1 ("Timetable"): two sample direction sections with real
+        datetime.time departure values, header rows containing 'Stop Name',
+        and a blank row separator between sections.
+      - Sheet 2 ("Instructions"): usage notes (not read by the parser).
+    """
+    from datetime import time as dt_time_cls
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+
+    # ── Sheet 1: Timetable (parser reads this sheet) ──────────────────
+    ws = wb.active
+    ws.title = "Timetable"
+
+    HEADER_FILL  = PatternFill("solid", fgColor="2E75B6")
+    TITLE_FILL   = PatternFill("solid", fgColor="1F4E79")
+    SAMPLE_FILL  = PatternFill("solid", fgColor="DDEBF7")
+    WHITE_BOLD   = Font(name="Calibri", bold=True, color="FFFFFF", size=11)
+    BOLD         = Font(name="Calibri", bold=True, size=10)
+    NORMAL       = Font(name="Calibri", size=10)
+    CENTER       = Alignment(horizontal="center", vertical="center")
+    LEFT         = Alignment(horizontal="left",   vertical="center")
+
+    def _title_row(ws, text: str) -> None:
+        ws.append([text])
+        cell = ws.cell(row=ws.max_row, column=1)
+        cell.font   = WHITE_BOLD
+        cell.fill   = TITLE_FILL
+        cell.alignment = LEFT
+
+    def _header_row(ws) -> None:
+        ws.append(["Stop Name", "Stop Location", "Stop ID",
+                   "Monday – Sunday", None, None])
+        for col in range(1, 7):
+            cell = ws.cell(row=ws.max_row, column=col)
+            cell.font      = WHITE_BOLD
+            cell.fill      = HEADER_FILL
+            cell.alignment = CENTER
+
+    def _data_row(ws, stop_name, stop_loc, stop_id, *times) -> None:
+        ws.append([stop_name, stop_loc, stop_id] + list(times))
+        row = ws.max_row
+        for col in range(1, 4):
+            cell = ws.cell(row=row, column=col)
+            cell.font      = BOLD
+            cell.fill      = SAMPLE_FILL
+            cell.alignment = LEFT
+        for col_idx, _ in enumerate(times, start=4):
+            cell = ws.cell(row=row, column=col_idx)
+            cell.number_format = "HH:MM"
+            cell.font          = NORMAL
+            cell.fill          = SAMPLE_FILL
+            cell.alignment     = CENTER
+
+    # Outbound section
+    _title_row(ws, "Outbound: Sample Town to Sample City")
+    _header_row(ws)
+    _data_row(ws, "Sample Start",  "Town A", "8380B1000001",
+              dt_time_cls(7, 0),  dt_time_cls(9, 0),  dt_time_cls(11, 0))
+    _data_row(ws, "Sample Middle", "Town B", "8380B1000002",
+              dt_time_cls(7, 15), dt_time_cls(9, 15), dt_time_cls(11, 15))
+    _data_row(ws, "Sample End",    "Town C", "8380B1000003",
+              dt_time_cls(7, 30), dt_time_cls(9, 30), dt_time_cls(11, 30))
+    ws.append([])  # blank row — signals end of section to parser
+
+    # Return section
+    _title_row(ws, "Return: Sample City to Sample Town")
+    _header_row(ws)
+    _data_row(ws, "Sample End",    "Town C", "8380B1000003",
+              dt_time_cls(8, 0),  dt_time_cls(10, 0), dt_time_cls(12, 0))
+    _data_row(ws, "Sample Middle", "Town B", "8380B1000002",
+              dt_time_cls(8, 15), dt_time_cls(10, 15), dt_time_cls(12, 15))
+    _data_row(ws, "Sample Start",  "Town A", "8380B1000001",
+              dt_time_cls(8, 30), dt_time_cls(10, 30), dt_time_cls(12, 30))
+
+    ws.column_dimensions["A"].width = 28
+    ws.column_dimensions["B"].width = 18
+    ws.column_dimensions["C"].width = 18
+    for col in range(4, 9):
+        ws.column_dimensions[get_column_letter(col)].width = 12
+    ws.freeze_panes = "A2"
+
+    # ── Sheet 2: Instructions (not read by the parser) ────────────────
+    ws2 = wb.create_sheet("Instructions")
+    instructions = [
+        ["NTA Timetable Submission Template"],
+        [],
+        ["FORMAT RULES"],
+        ["1. Do not alter the column order: Stop Name | Stop Location | Stop ID | departure times"],
+        ["2. Stop IDs must be valid NTA stop codes (e.g. 8380B1234567 or short numeric form 1234567)."],
+        ["3. Departure times must be entered as time values (not text strings)."],
+        ["4. Each direction (outbound / return) is a separate section."],
+        ["5. Leave a completely blank row between sections."],
+        ["6. The section title row (e.g. 'Outbound: …') must contain only one cell value."],
+        [],
+        ["SHEET TO FILL IN: 'Timetable' (Sheet 1)"],
+        ["Replace the sample data with your actual route stops and departure times."],
+    ]
+    for row_data in instructions:
+        ws2.append(row_data)
+    ws2.column_dimensions["A"].width = 90
+    ws2["A1"].font = Font(name="Calibri", bold=True, size=14)
+
+    wb.save(output_path)
+    logger.info("Timetable template written to '%s'.", output_path)

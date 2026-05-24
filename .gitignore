@@ -28,8 +28,6 @@ MANIFEST
 # Excel files (data, templates) and lock files
 *.xls
 *.xlsx
-# Allow the static submission template that ships with the app
-!src/route_licensing/api/static/timetable_template.xlsx
 ~$*
 *.zip
 # PyInstaller
